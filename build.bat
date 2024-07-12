@@ -1,2 +1,15 @@
-:: glfw_src_win32="win32_time.c win32_module.c win32_thread.c"
-:: glfw_src_win32="win32_platform.h win32_joystick.h win32_init.c win32_joystick.c win32_monitor.c win32_window.c wgl_context.c"
+@echo off
+
+set vulkan_sdk=C:\Users\Kilian\VulkanSDK
+
+set include_paths=/I%vulkan_sdk%\Include /Iglfw\include
+set library_paths=/LIBPATH:%vulkan_sdk%\Lib
+
+cl /nologo /DEBUG /Z7 %include_paths% main.c bin\glfw.lib /link %library_paths% vulkan-1.lib User32.lib Gdi32.lib Shell32.lib
+
+
+if not exist bin\shaders md bin\shaders
+
+set glslc=%vulkan_sdk%\bin\glslc.exe
+%glslc% shaders/default.vert -o bin/shaders/default.vert.spv
+%glslc% shaders/default.frag -o bin/shaders/default.frag.spv

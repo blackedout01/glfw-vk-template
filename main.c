@@ -2,11 +2,11 @@
 #include <stdio.h>
 #include <errno.h>
 #include <string.h>
-#include <unistd.h>
+
+#include "util.c"
 
 #include "GLFW/glfw3.h"
 
-#include "util.c"
 #include "vulkan.c"
 
 typedef struct {
@@ -84,7 +84,7 @@ int main() {
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
     GLFWwindow *Window = glfwCreateWindow(1280, 720, "glfw-vulkan-template", 0, 0);
     CheckGoto(Window == 0, label_DestroyVulkanInstance);
-    context Context = {};
+    context Context = {0};
     glfwSetWindowUserPointer(Window, &Context);
     glfwSetScrollCallback(Window, ScrollCallbackGLFW);
     glfwSetFramebufferSizeCallback(Window, FramebufferSizeCallbackGLFW);
@@ -205,7 +205,7 @@ int main() {
 
         CheckGoto(VulkanSubmitFinalAndPresent(VulkanSurfaceDevice, &VulkanSwapchainHandler, VulkanGraphicsQueue, GraphicsCommandBuffer, FramebufferExtent), label_IdleDestroyAndExit);
 
-        usleep(1000000);
+        SleepMilliseconds(1000);
     }
 
     Result = 0;

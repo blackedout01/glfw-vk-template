@@ -2,6 +2,11 @@
 *.out.dSYM
 .DS_Store
 
+*.exe
+*.ilk
+*.obj
+*.pdb
+
 bin
 vulkan
 

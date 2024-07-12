@@ -20,6 +20,14 @@
 #define SIZE_T_MAX ((size_t)-1)
 #endif
 
+#ifdef _WIN32
+#include <windows.h>
+#define SleepMilliseconds(Value) Sleep(Value)
+#else
+#include <unistd.h>
+#define SleepMilliseconds(Value) usleep(1000*(Value))
+#endif
+
 typedef struct {
     uint32_t Cap;
     uint32_t Count;

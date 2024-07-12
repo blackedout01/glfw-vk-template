@@ -418,7 +418,7 @@ static int VulkanCreateSurfaceDevice(VkInstance Instance, VkSurfaceKHR Surface, 
         ExtensionNameCount -= 1;
     }
 
-    VkPhysicalDeviceFeatures PhyiscalDeviceFeatures = {};
+    VkPhysicalDeviceFeatures PhyiscalDeviceFeatures = {0};
     VkDeviceCreateInfo DeviceCreateInfo = {
         .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
         .pNext = 0,
@@ -662,8 +662,8 @@ static int VulkanCreateSwapchainAndHandler(vulkan_surface_device Device, VkExten
             .Count = 0,
             .Next = 0
         },
-        .AcquiredImageIndices = {},
-        .AcquiredImageSwapchainIndices = {},
+        .AcquiredImageIndices = {0},
+        .AcquiredImageSwapchainIndices = {0},
     };
 
     VkSemaphoreCreateInfo UnsignaledSemaphoreCreateInfo = {
@@ -987,6 +987,7 @@ static int VulkanAcquireNextImage(vulkan_surface_device Device, vulkan_swapchain
         } else {
             if(AcquireResult == VK_SUBOPTIMAL_KHR) {
                 // NOTE(blackedout): This is handled after queueing for presentation
+                printfc(CODE_YELLOW, "Acquire suboptimal.\n");
             } else VulkanCheckGoto(AcquireResult, label_Error);
 
             // NOTE(blackedout): Image acquisition worked, so push
@@ -1048,15 +1049,17 @@ static int VulkanSubmitFinalAndPresent(vulkan_surface_device Device, vulkan_swap
     VkResult PresentResult = vkQueuePresentKHR(GraphicsQueue, &PresentInfo);
     double after = glfwGetTime();
     printf("Took %f s.\n", after - before);
-    if(PresentResult == VK_SUBOPTIMAL_KHR) {
+    if(PresentResult == VK_SUBOPTIMAL_KHR || PresentResult == VK_ERROR_OUT_OF_DATE_KHR) {
         // TODO(blackedout): There is still an issue where sometimes the next frame is not rendered (clear color only) when resizing multiple times in quick succession
         vulkan_swapchain NewSwapchain = Handler.Swapchains[SwapchainIndex];
         CheckGoto(VulkanCreateSwapchain(Device, FramebufferExtent, Handler.RenderPass, &NewSwapchain, &NewSwapchain), label_Error);
         uint32_t NewSwapchainIndex = IndicesCircularPush(&Handler.SwapchainBufIndices);
         Handler.Swapchains[NewSwapchainIndex] = NewSwapchain;
 
-        printf("Swapchain %d pushed because suboptimal\n", NewSwapchainIndex);
-    } else VulkanCheckGoto(PresentResult, label_Error); // NOTE(blackedout): VK_ERROR_OUT_OF_DATE_KHR shouldn't be happening here (?) since there was no event polling that could've changed the window
+        // TODO(blackedout): VK_ERROR_OUT_OF_DATE_KHR shouldn't be happening here (?) since there was no event polling that could've changed the window
+        // Apparently this ^ is wrong, because on windows PresentResult is VK_ERROR_OUT_OF_DATE_KHR without any prior info (from acquiring)
+        printf("Swapchain %d pushed because %s.\n", NewSwapchainIndex, string_VkResult(PresentResult));
+    } else VulkanCheckGoto(PresentResult, label_Error);
 
     // NOTE(blackedout): Remove acquired image from list
     uint32_t AcquiredImagesBaseIndex = IndicesCircularTake(&Handler.AcquiredImageBufIndices);
