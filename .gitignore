@@ -1,0 +1,8 @@
+*.out
+*.out.dSYM
+.DS_Store
+
+bin
+vulkan
+
+.vscode
