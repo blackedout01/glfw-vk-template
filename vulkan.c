@@ -8,8 +8,10 @@
 
 typedef struct {
     VkDevice Handle;
-    VkPhysicalDevice PhysicalDevice;
     VkSurfaceKHR Surface;
+
+    VkPhysicalDevice PhysicalDevice;
+    //VkPhysicalDeviceMemoryProperties PhysicalMemoryProperties;
 
     uint32_t GraphicsQueueFamilyIndex;
     uint32_t PresentQueueFamilyIndex;
@@ -55,6 +57,30 @@ typedef struct {
     VkRenderPass RenderPass;
     VkPipeline Pipeline;
 } vulkan_graphics_pipeline_info;
+
+typedef struct {
+    VkBuffer Handle;
+    VkDeviceMemory Memory;
+} vulkan_buffer;
+
+typedef struct {
+    void *Source;
+    uint64_t ByteCount;
+    uint64_t *OffsetPointer;
+} vulkan_subbuf;
+
+typedef struct {
+    VkBuffer VertexHandle;
+    VkBuffer IndexHandle;
+
+    uint32_t MemoryCount;
+    VkDeviceMemory MemoryBufs[2];
+} vulkan_static_buffers;
+
+typedef struct {
+    vulkan_subbuf Vertices;
+    vulkan_subbuf Indices;
+} vulkan_mesh_subbuf;
 
 // NOTE(blackedout): IncompleteActions: 0: error, 1: warn, 2: ignore
 static int VulkanCheckFun(VkResult VulkanResult, int IncompleteAction, const char *CallString) {
@@ -196,6 +222,237 @@ static int VulkanCreateShaderModule(vulkan_surface_device Device, const char *By
 
     return 0;
 
+label_Error:
+    return 1;
+}
+
+static int VulkanGetBufferMemoryTypeIndex(vulkan_surface_device Device, uint32_t MemoryTypeBits, VkMemoryPropertyFlags MemoryPropertyFlags, uint32_t *MemoryTypeIndex) {
+     // TODO(blackedout): Make this part of vulkan_surface_device?
+    VkPhysicalDeviceMemoryProperties PhysicalDeviceMemoryProperties;
+    vkGetPhysicalDeviceMemoryProperties(Device.PhysicalDevice, &PhysicalDeviceMemoryProperties);
+
+    int HasMemoryType = 0;
+    uint32_t BestBufferMemoryTypeIndex;
+    for(uint32_t I = 0; I < PhysicalDeviceMemoryProperties.memoryTypeCount; ++I) {
+        int TypeUsable = (MemoryTypeBits & (1 << I)) &&
+                        (PhysicalDeviceMemoryProperties.memoryTypes[I].propertyFlags & MemoryPropertyFlags) == MemoryPropertyFlags;
+        if(TypeUsable) {
+            HasMemoryType = 1;
+            BestBufferMemoryTypeIndex = I;
+        }
+    }
+    if(HasMemoryType == 0) {
+        return 1;
+    }
+
+    *MemoryTypeIndex = BestBufferMemoryTypeIndex;
+    return 0;
+}
+
+static void VulkanDestroyBuffer(vulkan_surface_device Device, vulkan_buffer Buffer) {
+    vkDestroyBuffer(Device.Handle, Buffer.Handle, 0);
+    vkFreeMemory(Device.Handle, Buffer.Memory, 0);
+}
+
+static int VulkanCreateExlusiveBufferWithMemory(vulkan_surface_device Device, uint64_t ByteCount, VkBufferUsageFlags UsageFlags, VkMemoryPropertyFlags MemoryPropertyFlags, vulkan_buffer *Buffer) {
+    VkBufferCreateInfo BufferCreateInfo = {
+        .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+        .pNext = 0,
+        .flags = 0,
+        .size = ByteCount,
+        .usage = UsageFlags,
+        .sharingMode = VK_SHARING_MODE_EXCLUSIVE, // NOTE(blackedout): Sharing between queue families
+        .queueFamilyIndexCount = 0,
+        .pQueueFamilyIndices = 0
+    };
+
+    VkBuffer BufferHandle;
+    VulkanCheckGoto(vkCreateBuffer(Device.Handle, &BufferCreateInfo, 0, &BufferHandle), label_Error);
+
+    VkMemoryRequirements BufferMemoryRequirements;
+    vkGetBufferMemoryRequirements(Device.Handle, BufferHandle, &BufferMemoryRequirements);
+
+    uint32_t BufferMemoryTypeIndex;
+    CheckGoto(VulkanGetBufferMemoryTypeIndex(Device, BufferMemoryRequirements.memoryTypeBits, MemoryPropertyFlags, &BufferMemoryTypeIndex), label_Buffer);
+
+    VkMemoryAllocateInfo MemoryAllocateInfo = {
+        .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+        .pNext = 0,
+        .allocationSize = BufferMemoryRequirements.size,
+        .memoryTypeIndex = BufferMemoryTypeIndex
+    };
+
+    VkDeviceMemory BufferMemoryHandle;
+    VulkanCheckGoto(vkAllocateMemory(Device.Handle, &MemoryAllocateInfo, 0, &BufferMemoryHandle), label_Buffer);
+    VulkanCheckGoto(vkBindBufferMemory(Device.Handle, BufferHandle, BufferMemoryHandle, 0), label_Memory);
+
+    vulkan_buffer LocalBuffer = {
+        .Handle = BufferHandle,
+        .Memory = BufferMemoryHandle,
+    };
+    *Buffer = LocalBuffer;
+
+    return 0;
+    
+label_Memory:
+    vkFreeMemory(Device.Handle, BufferMemoryHandle, 0);
+label_Buffer:
+    vkDestroyBuffer(Device.Handle, BufferHandle, 0);
+label_Error:
+    return 1;
+}
+
+static void VulkanDestroyStaticBuffers(vulkan_surface_device Device, vulkan_static_buffers StaticBuffers) {
+    vkDestroyBuffer(Device.Handle, StaticBuffers.VertexHandle, 0);
+    vkDestroyBuffer(Device.Handle, StaticBuffers.IndexHandle, 0);
+    for(uint32_t I = 0; I < StaticBuffers.MemoryCount; ++I) {
+        vkFreeMemory(Device.Handle, StaticBuffers.MemoryBufs[I], 0);
+    }
+}
+
+static int VulkanCreateStaticBuffers(vulkan_surface_device Device, vulkan_mesh_subbuf *MeshSubbufs, uint32_t MeshSubbufCount, VkCommandPool TransferCommandPool, VkQueue TransferQueue, vulkan_static_buffers *StaticBuffers) {
+    uint64_t TotalVertexByteCount = 0;
+    uint64_t TotalIndexByteCount = 0;
+    for(uint32_t I = 0; I < MeshSubbufCount; ++I) {
+        TotalVertexByteCount += MeshSubbufs[I].Vertices.ByteCount;
+        TotalIndexByteCount += MeshSubbufs[I].Indices.ByteCount;
+    }
+
+    VkBufferCreateInfo BufferCreateInfo = {
+        .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+        .pNext = 0,
+        .flags = 0,
+        .size = TotalVertexByteCount,
+        .usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+        .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+        .queueFamilyIndexCount = 0,
+        .pQueueFamilyIndices = 0
+    };
+    VkBuffer VertexBuffer;
+    VulkanCheckGoto(vkCreateBuffer(Device.Handle, &BufferCreateInfo, 0, &VertexBuffer), label_Error);
+
+    BufferCreateInfo.size = TotalIndexByteCount;
+    BufferCreateInfo.usage = VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+
+    VkBuffer IndexBuffer;
+    VulkanCheckGoto(vkCreateBuffer(Device.Handle, &BufferCreateInfo, 0, &IndexBuffer), label_VertexBuffer);
+
+    VkMemoryRequirements VertexMemoryRequirements, IndexMemoryRequirements;
+    vkGetBufferMemoryRequirements(Device.Handle, VertexBuffer, &VertexMemoryRequirements);
+    vkGetBufferMemoryRequirements(Device.Handle, IndexBuffer, &IndexMemoryRequirements);
+
+    // TODO(blackedout): Handle non uniform device memory necessity
+    uint32_t BufferMemoryTypeIndex;
+    CheckGoto(VulkanGetBufferMemoryTypeIndex(Device, VertexMemoryRequirements.memoryTypeBits & IndexMemoryRequirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &BufferMemoryTypeIndex), label_IndexBuffer);
+    
+    uint64_t AlignedVertexByteCount = AlignAny(TotalVertexByteCount, uint64_t, IndexMemoryRequirements.alignment);
+    uint64_t AlignedIndexByteCount = TotalIndexByteCount;
+
+    uint64_t AlignedTotalByteCount = AlignedVertexByteCount + AlignedIndexByteCount;
+
+     VkMemoryAllocateInfo MemoryAllocateInfo = {
+        .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+        .pNext = 0,
+        .allocationSize = AlignedTotalByteCount,
+        .memoryTypeIndex = BufferMemoryTypeIndex
+    };
+
+    VkDeviceMemory BufferMemoryHandle;
+    VulkanCheckGoto(vkAllocateMemory(Device.Handle, &MemoryAllocateInfo, 0, &BufferMemoryHandle), label_IndexBuffer);
+
+    VulkanCheckGoto(vkBindBufferMemory(Device.Handle, VertexBuffer, BufferMemoryHandle, 0), label_Memory);
+    VulkanCheckGoto(vkBindBufferMemory(Device.Handle, IndexBuffer, BufferMemoryHandle, AlignedVertexByteCount), label_Memory);
+
+    vulkan_buffer StagingBuffer;
+    CheckGoto(VulkanCreateExlusiveBufferWithMemory(Device, AlignedTotalByteCount, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &StagingBuffer), label_Memory);
+
+    void *MappedStagingBuffer;
+    VulkanCheckGoto(vkMapMemory(Device.Handle, StagingBuffer.Memory, 0, AlignedTotalByteCount, 0, &MappedStagingBuffer), label_StagingBuffer);
+    uint64_t VertexOffset = 0, IndexOffset = 0;
+    for(uint32_t I = 0; I < MeshSubbufCount; ++I) {
+        vulkan_mesh_subbuf Subbuf = MeshSubbufs[I];
+        if(Subbuf.Vertices.Source && Subbuf.Vertices.ByteCount > 0) {
+            memcpy(MappedStagingBuffer + VertexOffset, Subbuf.Vertices.Source, Subbuf.Vertices.ByteCount);
+            *Subbuf.Vertices.OffsetPointer = VertexOffset;
+            VertexOffset += Subbuf.Vertices.ByteCount;
+        }
+        if(Subbuf.Indices.Source && Subbuf.Indices.ByteCount > 0) {
+            memcpy(MappedStagingBuffer + AlignedVertexByteCount + IndexOffset, Subbuf.Indices.Source, Subbuf.Indices.ByteCount);
+            *Subbuf.Indices.OffsetPointer = IndexOffset;
+            IndexOffset += Subbuf.Indices.ByteCount;
+        }
+    }
+    vkUnmapMemory(Device.Handle, StagingBuffer.Memory);
+
+    VkCommandBufferAllocateInfo TransferCommandBufferAllocateInfo = {
+        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+        .pNext = 0,
+        .commandPool = TransferCommandPool,
+        .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+        .commandBufferCount = 1,
+    };
+    VkCommandBuffer TransferCommandBuffer;
+    VulkanCheckGoto(vkAllocateCommandBuffers(Device.Handle, &TransferCommandBufferAllocateInfo, &TransferCommandBuffer), label_StagingBuffer);
+
+    VkCommandBufferBeginInfo TransferBeginInfo = {
+        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+        .pNext = 0,
+        .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+        .pInheritanceInfo = 0
+    };
+    VulkanCheckGoto(vkBeginCommandBuffer(TransferCommandBuffer, &TransferBeginInfo), label_CommandBuffer);
+    VkBufferCopy VertexBufferCopy = {
+        .srcOffset = 0,
+        .dstOffset = 0,
+        .size = TotalVertexByteCount
+    };
+    VkBufferCopy IndexBufferCopy = {
+        .srcOffset = AlignedVertexByteCount,
+        .dstOffset = 0,
+        .size = TotalIndexByteCount
+    };
+    vkCmdCopyBuffer(TransferCommandBuffer, StagingBuffer.Handle, VertexBuffer, 1, &VertexBufferCopy);
+    vkCmdCopyBuffer(TransferCommandBuffer, StagingBuffer.Handle, IndexBuffer, 1, &IndexBufferCopy);
+    VulkanCheckGoto(vkEndCommandBuffer(TransferCommandBuffer), label_CommandBuffer);
+
+    VkSubmitInfo TransferSubmitInfo = {
+        .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+        .pNext = 0,
+        .waitSemaphoreCount = 0,
+        .pWaitSemaphores = 0,
+        .pWaitDstStageMask = 0,
+        .commandBufferCount = 1,
+        .pCommandBuffers = &TransferCommandBuffer,
+        .signalSemaphoreCount = 0,
+        .pSignalSemaphores = 0
+    };
+
+    VulkanCheckGoto(vkQueueSubmit(TransferQueue, 1, &TransferSubmitInfo, VULKAN_NULL_HANDLE), label_CommandBuffer);
+    VulkanCheckGoto(vkQueueWaitIdle(TransferQueue), label_CommandBuffer);
+
+    vulkan_static_buffers LocalStaticBuffers = {
+        .VertexHandle = VertexBuffer,
+        .IndexHandle = IndexBuffer,
+        .MemoryCount = 1,
+        .MemoryBufs = { BufferMemoryHandle, VULKAN_NULL_HANDLE }
+    };
+    *StaticBuffers = LocalStaticBuffers;
+
+    vkFreeCommandBuffers(Device.Handle, TransferCommandPool, 1, &TransferCommandBuffer);
+    VulkanDestroyBuffer(Device, StagingBuffer);
+
+    return 0;
+
+label_CommandBuffer:
+    vkFreeCommandBuffers(Device.Handle, TransferCommandPool, 1, &TransferCommandBuffer);
+label_StagingBuffer:
+    VulkanDestroyBuffer(Device, StagingBuffer);
+label_Memory:
+    vkFreeMemory(Device.Handle, BufferMemoryHandle, 0);
+label_IndexBuffer:
+    vkDestroyBuffer(Device.Handle, IndexBuffer, 0);
+label_VertexBuffer:
+    vkDestroyBuffer(Device.Handle, VertexBuffer, 0);
 label_Error:
     return 1;
 }
@@ -717,7 +974,7 @@ static void VulkanDestroyDefaultGraphicsPipeline(vulkan_surface_device Device, v
     vkDestroyPipelineLayout(Device.Handle, PipelineInfo.Layout, 0);
 }
 
-static int VulkanCreateDefaultGraphicsPipeline(vulkan_surface_device Device, VkShaderModule ModuleVS, VkShaderModule ModuleFS, VkExtent2D InitialExtent, VkFormat SwapchainFormat, vulkan_graphics_pipeline_info *PipelineInfo) {
+static int VulkanCreateDefaultGraphicsPipeline(vulkan_surface_device Device, VkShaderModule ModuleVS, VkShaderModule ModuleFS, VkExtent2D InitialExtent, VkFormat SwapchainFormat, VkPipelineVertexInputStateCreateInfo PipelineVertexInputStateCreateInfo, vulkan_graphics_pipeline_info *PipelineInfo) {
     VkPipelineShaderStageCreateInfo PipelineStageCreateInfos[] = {
         {
             .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
@@ -752,15 +1009,7 @@ static int VulkanCreateDefaultGraphicsPipeline(vulkan_surface_device Device, VkS
         .pDynamicStates = VulkanDynamicStates
     };
 
-    VkPipelineVertexInputStateCreateInfo PipelineVertexInputStateCreateInfo = {
-        .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
-        .pNext = 0,
-        .flags = 0,
-        .vertexBindingDescriptionCount = 0,
-        .pVertexBindingDescriptions = 0,
-        .vertexAttributeDescriptionCount = 0,
-        .pVertexAttributeDescriptions = 0,
-    };
+    
 
     VkPipelineInputAssemblyStateCreateInfo PipelineInputAssemblyStateCreateInfo = {
          .sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,

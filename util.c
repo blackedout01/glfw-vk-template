@@ -6,6 +6,7 @@
 #define Clamp(X, A, B) (Max(Min(X, B), A))
 
 #define Align16(X, Type) ((((Type)(X)) + ((Type)15)) & (~((Type)15)))
+#define AlignAny(X, Type, Alignment) (((Type)(X)) - ((((Type)(X)) + ((Type)(Alignment))) % ((Type)(Alignment))))
 
 #define CODE_YELLOW "\033[0;33m"
 #define CODE_RED "\033[0;31m"
@@ -27,6 +28,14 @@
 #include <unistd.h>
 #define SleepMilliseconds(Value) usleep(1000*(Value))
 #endif
+
+typedef struct {
+    float E[2];
+} v2;
+
+typedef struct {
+    float E[3];
+} v3;
 
 typedef struct {
     uint32_t Cap;

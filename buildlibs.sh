@@ -1,4 +1,4 @@
-vulkan_sdk="/Path/To/VulkanSDK"
+vulkan_sdk="/Applications/VulkanSDK"
 
 mkdir -p bin
 

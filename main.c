@@ -10,6 +10,18 @@
 #include "vulkan.c"
 
 typedef struct {
+        v2 Position;
+        v3 Color;
+    } vertex;
+static vertex Vertices[] = {
+    { .Position = { -0.5f, 0.5f }, .Color = { 1.0f, 1.0f, 1.0f } },
+    { .Position = { -0.5f, -0.5f }, .Color = { 1.0f, 0.0f, 0.0f } },
+    { .Position = { 0.5f, -0.5f }, .Color = { 0.0f, 1.0f, 0.0f } },
+    { .Position = { 0.5f, 0.5f }, .Color = { 0.0f, 0.0f, 1.0f } },
+};
+static uint32_t Indices[] = { 0, 3, 2, 2, 1, 0 };
+
+typedef struct {
     int FramebufferWidth;
     int FramebufferHeight;
 } context;
@@ -103,8 +115,39 @@ int main() {
     VkShaderModule VulkanDefaultVS, VulkanDefaultFS;
     CheckGoto(LoadShaders(VulkanSurfaceDevice, &VulkanDefaultVS, &VulkanDefaultFS), label_DestroySurfaceDevice);
 
+    VkVertexInputBindingDescription VertexInputBindingDescription = {
+        .binding = 0,
+        .stride = sizeof(vertex),
+        .inputRate = VK_VERTEX_INPUT_RATE_VERTEX,
+    };
+
+    VkVertexInputAttributeDescription VertexAttributeDescriptions[] = {
+        {
+            .location = 0,
+            .binding = 0,
+            .format = VK_FORMAT_R32G32_SFLOAT,
+            .offset = offsetof(vertex, Position)
+        },
+        {
+            .location = 1,
+            .binding = 0,
+            .format = VK_FORMAT_R32G32B32_SFLOAT,
+            .offset = offsetof(vertex, Color)
+        },
+    };
+
+    VkPipelineVertexInputStateCreateInfo PipelineVertexInputStateCreateInfo = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+        .pNext = 0,
+        .flags = 0,
+        .vertexBindingDescriptionCount = 1,
+        .pVertexBindingDescriptions = &VertexInputBindingDescription,
+        .vertexAttributeDescriptionCount = ArrayCount(VertexAttributeDescriptions),
+        .pVertexAttributeDescriptions = VertexAttributeDescriptions,
+    };
+
     vulkan_graphics_pipeline_info VulkanGraphicsPipelineInfo;
-    CheckGoto(VulkanCreateDefaultGraphicsPipeline(VulkanSurfaceDevice, VulkanDefaultVS, VulkanDefaultFS, VulkanSurfaceDevice.InitialExtent, VulkanSurfaceDevice.InitialSurfaceFormat.format, &VulkanGraphicsPipelineInfo), label_DestroyShaders);
+    CheckGoto(VulkanCreateDefaultGraphicsPipeline(VulkanSurfaceDevice, VulkanDefaultVS, VulkanDefaultFS, VulkanSurfaceDevice.InitialExtent, VulkanSurfaceDevice.InitialSurfaceFormat.format, PipelineVertexInputStateCreateInfo, &VulkanGraphicsPipelineInfo), label_DestroyShaders);
 
     vulkan_swapchain_handler VulkanSwapchainHandler;
     VkExtent2D InitialExtent = { .width = (uint32_t)Width, .height = (uint32_t)Height };
@@ -131,7 +174,17 @@ int main() {
 
     VkQueue VulkanGraphicsQueue;
     vkGetDeviceQueue(VulkanSurfaceDevice.Handle, VulkanSurfaceDevice.GraphicsQueueFamilyIndex, 0, &VulkanGraphicsQueue);
-    
+
+    vulkan_static_buffers VulkanStaticBuffers;
+    uint64_t VerticesByteOffset, IndicesByteOffset;
+    vulkan_mesh_subbuf MeshSubbufs[] = {
+        {
+            .Vertices = { .Source = Vertices, .ByteCount = sizeof(Vertices), .OffsetPointer = &VerticesByteOffset },
+            .Indices = { .Source = Indices, .ByteCount = sizeof(Indices), .OffsetPointer = &IndicesByteOffset }
+        }
+    };
+    CheckGoto(VulkanCreateStaticBuffers(VulkanSurfaceDevice, MeshSubbufs, ArrayCount(MeshSubbufs), VulkanGraphicsCommandPool, VulkanGraphicsQueue, &VulkanStaticBuffers), label_DestroyCommandPool);
+
     VkExtent2D FramebufferExtent;
     int A = 0;
     while(glfwWindowShouldClose(Window) == 0) {
@@ -195,7 +248,11 @@ int main() {
         vkCmdSetViewport(GraphicsCommandBuffer, 0, 1, &Viewport);
         vkCmdSetScissor(GraphicsCommandBuffer, 0, 1, &Scissors);
         printf("A = %d\n", A);
-        vkCmdDraw(GraphicsCommandBuffer, 3 + 3*A, 1, 0, 0);
+        VkDeviceSize VertexBufferOffset = VerticesByteOffset; // TODO(blackedout): Are these byte offsets??
+        vkCmdBindVertexBuffers(GraphicsCommandBuffer, 0, 1, &VulkanStaticBuffers.VertexHandle, &VertexBufferOffset);
+        vkCmdBindIndexBuffer(GraphicsCommandBuffer, VulkanStaticBuffers.IndexHandle, IndicesByteOffset, VK_INDEX_TYPE_UINT32);
+        //vkCmdDraw(GraphicsCommandBuffer, 3 + 3*A, 1, 0, 0);
+        vkCmdDrawIndexed(GraphicsCommandBuffer, ArrayCount(Indices), 1, 0, 0, 0);
         ++A;
         if(A == 4) {
             A = 0;
@@ -210,9 +267,12 @@ int main() {
 
     Result = 0;
 
+label_TODO:;
 label_IdleDestroyAndExit:
     VulkanCheckGoto(vkDeviceWaitIdle(VulkanSurfaceDevice.Handle), label_IdleError);
 label_IdleError:;
+label_DestroyStaticBuffers:
+    VulkanDestroyStaticBuffers(VulkanSurfaceDevice, VulkanStaticBuffers);
 label_DestroyCommandPool:
     vkDestroyCommandPool(VulkanSurfaceDevice.Handle, VulkanGraphicsCommandPool, 0);
 label_DestroySwapchainHandler:

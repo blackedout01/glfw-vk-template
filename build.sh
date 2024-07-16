@@ -1,4 +1,4 @@
-vulkan_sdk=""
+vulkan_sdk="/Applications/VulkanSDK"
 
 include_paths="-I$vulkan_sdk/macOS/include -Iglfw/include"
 library_paths="-L$vulkan_sdk/macOS/lib"
