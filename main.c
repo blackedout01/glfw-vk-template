@@ -10,9 +10,9 @@
 #include "vulkan.c"
 
 typedef struct {
-        v2 Position;
-        v3 Color;
-    } vertex;
+    v2 Position;
+    v3 Color;
+} vertex;
 static vertex Vertices[] = {
     { .Position = { -0.5f, 0.5f }, .Color = { 1.0f, 1.0f, 1.0f } },
     { .Position = { -0.5f, -0.5f }, .Color = { 1.0f, 0.0f, 0.0f } },
@@ -22,8 +22,15 @@ static vertex Vertices[] = {
 static uint32_t Indices[] = { 0, 3, 2, 2, 1, 0 };
 
 typedef struct {
+    m4 M, V, P;
+    v2 A;
+} ubo_mat;
+
+typedef struct {
     int FramebufferWidth;
     int FramebufferHeight;
+
+    v2 FocusOffset;
 } context;
 
 static void ErrorCallbackGLFW(int Code, const char *Description) {
@@ -31,7 +38,10 @@ static void ErrorCallbackGLFW(int Code, const char *Description) {
 }
 
 static void ScrollCallbackGLFW(GLFWwindow *Window, double OffsetX, double OffsetY) {
-    //printf("Scroll (%.2f, %.2f)\n", OffsetX, OffsetY);
+    context *Context = (context *)glfwGetWindowUserPointer(Window);
+    double Scale = 0.01;
+    Context->FocusOffset.E[0] += (float)(Scale*OffsetX);
+    Context->FocusOffset.E[1] += (float)(Scale*OffsetY);
 }
 
 static void FramebufferSizeCallbackGLFW(GLFWwindow *Window, int Width, int Height) {
@@ -41,24 +51,35 @@ static void FramebufferSizeCallbackGLFW(GLFWwindow *Window, int Width, int Heigh
     //printf("Framebuffer size (%d, %d)\n", Width, Height);
 }
 
-static int LoadShaders(vulkan_surface_device Device, VkShaderModule *ModuleVS, VkShaderModule *ModuleFS) {
+static int LoadShaders(vulkan_surface_device Device, vulkan_shader *Shader) {
     int Result = 1;
     uint8_t *BytesVS = 0, *BytesFS = 0;
     uint64_t ByteCountVS, ByteCountFS;
     CheckGoto(LoadFileContentsCStd("bin/shaders/default.vert.spv", &BytesVS, &ByteCountVS), label_Exit);
     CheckGoto(LoadFileContentsCStd("bin/shaders/default.frag.spv", &BytesFS, &ByteCountFS), label_Exit);
-    VkShaderModule DefaultVS, DefaultFS;
-    CheckGoto(VulkanCreateShaderModule(Device, (char *)BytesVS, ByteCountVS, &DefaultVS), label_Exit);
-    CheckGoto(VulkanCreateShaderModule(Device, (char *)BytesFS, ByteCountFS, &DefaultFS), label_VS);
-    
-    *ModuleVS = DefaultVS;
-    *ModuleFS = DefaultFS;
+
+    VkDescriptorSetLayoutBinding DescriptorSetLayoutBinding = {
+        .binding = 0,
+        .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+        .descriptorCount = 1,
+        .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
+        .pImmutableSamplers = 0
+    };
+
+    VkDescriptorSetLayoutCreateInfo DescriptorSetLayoutCreateInfo = {
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+        .pNext = 0,
+        .flags = 0,
+        .bindingCount = 1,
+        .pBindings = &DescriptorSetLayoutBinding
+    };
+
+    uint64_t UniformByteCount = sizeof(ubo_mat);
+    CheckGoto(VulkanCreateShader(Device, BytesVS, ByteCountVS, BytesFS, ByteCountFS, UniformByteCount, DescriptorSetLayoutCreateInfo, Shader), label_Exit);
 
     Result = 0;
     goto label_Exit;
 
-label_VS:
-    vkDestroyShaderModule(Device.Handle, DefaultVS, 0);
 label_Exit:
     free(BytesVS);
     free(BytesFS);
@@ -112,8 +133,8 @@ int main() {
     Context.FramebufferWidth = Width;
     Context.FramebufferHeight = Height;
 
-    VkShaderModule VulkanDefaultVS, VulkanDefaultFS;
-    CheckGoto(LoadShaders(VulkanSurfaceDevice, &VulkanDefaultVS, &VulkanDefaultFS), label_DestroySurfaceDevice);
+    vulkan_shader VulkanDefaultShader;
+    CheckGoto(LoadShaders(VulkanSurfaceDevice, &VulkanDefaultShader), label_DestroySurfaceDevice);
 
     VkVertexInputBindingDescription VertexInputBindingDescription = {
         .binding = 0,
@@ -147,7 +168,7 @@ int main() {
     };
 
     vulkan_graphics_pipeline_info VulkanGraphicsPipelineInfo;
-    CheckGoto(VulkanCreateDefaultGraphicsPipeline(VulkanSurfaceDevice, VulkanDefaultVS, VulkanDefaultFS, VulkanSurfaceDevice.InitialExtent, VulkanSurfaceDevice.InitialSurfaceFormat.format, PipelineVertexInputStateCreateInfo, &VulkanGraphicsPipelineInfo), label_DestroyShaders);
+    CheckGoto(VulkanCreateDefaultGraphicsPipeline(VulkanSurfaceDevice, VulkanDefaultShader.Vert, VulkanDefaultShader.Frag, VulkanSurfaceDevice.InitialExtent, VulkanSurfaceDevice.InitialSurfaceFormat.format, PipelineVertexInputStateCreateInfo, VulkanDefaultShader.DescriptorSetLayout, &VulkanGraphicsPipelineInfo), label_DestroyShaders);
 
     vulkan_swapchain_handler VulkanSwapchainHandler;
     VkExtent2D InitialExtent = { .width = (uint32_t)Width, .height = (uint32_t)Height };
@@ -197,7 +218,8 @@ int main() {
 
         VkExtent2D AcquiredImageExtent;
         VkFramebuffer AcquiredFramebuffer;
-        CheckGoto(VulkanAcquireNextImage(VulkanSurfaceDevice, &VulkanSwapchainHandler, FramebufferExtent, &AcquiredImageExtent, &AcquiredFramebuffer), label_IdleDestroyAndExit);
+        uint32_t AcquiredImageBufIndex;
+        CheckGoto(VulkanAcquireNextImage(VulkanSurfaceDevice, &VulkanSwapchainHandler, FramebufferExtent, &AcquiredImageExtent, &AcquiredFramebuffer, &AcquiredImageBufIndex), label_IdleDestroyAndExit);
         printf("current (%d, %d), acquired (%d, %d)\n", Context.FramebufferWidth, Context.FramebufferHeight, AcquiredImageExtent.width, AcquiredImageExtent.height);
 
         VulkanCheckGoto(vkResetCommandBuffer(GraphicsCommandBuffer, 0), label_IdleDestroyAndExit);
@@ -243,6 +265,12 @@ int main() {
             .extent = AcquiredImageExtent,
         };
 
+        ubo_mat *UboMat = VulkanDefaultShader.MappedUniformBuffers[AcquiredImageBufIndex];
+        UboMat->A.E[0] += Context.FocusOffset.E[0];
+        UboMat->A.E[1] += Context.FocusOffset.E[1];
+        Context.FocusOffset.E[0] = 0.0f;
+        Context.FocusOffset.E[1] = 0.0f;
+
         vkCmdBeginRenderPass(GraphicsCommandBuffer, &RenderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
         vkCmdBindPipeline(GraphicsCommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, VulkanGraphicsPipelineInfo.Pipeline);
         vkCmdSetViewport(GraphicsCommandBuffer, 0, 1, &Viewport);
@@ -252,6 +280,8 @@ int main() {
         vkCmdBindVertexBuffers(GraphicsCommandBuffer, 0, 1, &VulkanStaticBuffers.VertexHandle, &VertexBufferOffset);
         vkCmdBindIndexBuffer(GraphicsCommandBuffer, VulkanStaticBuffers.IndexHandle, IndicesByteOffset, VK_INDEX_TYPE_UINT32);
         //vkCmdDraw(GraphicsCommandBuffer, 3 + 3*A, 1, 0, 0);
+        vkCmdBindDescriptorSets(GraphicsCommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, VulkanGraphicsPipelineInfo.Layout, 0, 1,
+                                &VulkanDefaultShader.DescriptorSets[AcquiredImageBufIndex], 0, 0);
         vkCmdDrawIndexed(GraphicsCommandBuffer, ArrayCount(Indices), 1, 0, 0, 0);
         ++A;
         if(A == 4) {
@@ -261,8 +291,8 @@ int main() {
         VulkanCheckGoto(vkEndCommandBuffer(GraphicsCommandBuffer), label_IdleDestroyAndExit);
 
         CheckGoto(VulkanSubmitFinalAndPresent(VulkanSurfaceDevice, &VulkanSwapchainHandler, VulkanGraphicsQueue, GraphicsCommandBuffer, FramebufferExtent), label_IdleDestroyAndExit);
-
-        SleepMilliseconds(1000);
+        
+        SleepMilliseconds(1000); // NOTE(blackedout): EDITING THIS MIGHT CAUSE IMAGE FLASHING
     }
 
     Result = 0;
@@ -280,8 +310,7 @@ label_DestroySwapchainHandler:
 label_DestroyGraphicsPipeline:
     VulkanDestroyDefaultGraphicsPipeline(VulkanSurfaceDevice, VulkanGraphicsPipelineInfo);
 label_DestroyShaders:
-    vkDestroyShaderModule(VulkanSurfaceDevice.Handle, VulkanDefaultVS, 0);
-    vkDestroyShaderModule(VulkanSurfaceDevice.Handle, VulkanDefaultFS, 0);
+    VulkanDestroyShader(VulkanSurfaceDevice, VulkanDefaultShader);
 label_DestroySurfaceDevice:
     VulkanDestroySurfaceDevice(VulkanInstance, VulkanSurfaceDevice);
 label_DestroyWindow:

@@ -59,6 +59,21 @@ typedef struct {
 } vulkan_graphics_pipeline_info;
 
 typedef struct {
+    VkShaderModule Vert;
+    VkShaderModule Frag;
+
+    VkDeviceMemory UniformMemory;
+    VkBuffer UniformBuffers[MAX_ACQUIRED_IMAGE_COUNT];
+    void *MappedUniformBuffers[MAX_ACQUIRED_IMAGE_COUNT];
+
+    VkDescriptorSet DescriptorSets[MAX_ACQUIRED_IMAGE_COUNT];
+
+    // NOTE(blackedout): These should probably be moved to an instance that manages all shaders (as well as the uniform buffer memory).
+    VkDescriptorPool DescriptorPool;
+    VkDescriptorSetLayout DescriptorSetLayout;
+} vulkan_shader;
+
+typedef struct {
     VkBuffer Handle;
     VkDeviceMemory Memory;
 } vulkan_buffer;
@@ -113,6 +128,7 @@ static int VulkanCheckFun(VkResult VulkanResult, int IncompleteAction, const cha
 #define VulkanCheckGotoIncompleteOk(Result, Label) if(VulkanCheckFun(Result, 2, #Result)) goto Label
 #define VulkanCheckGotoIncompleteWarn(Result, Label) if(VulkanCheckFun(Result, 1, #Result)) goto Label
 
+// MARK: Scoring
 static int VulkanPickSurfaceFormat(VkPhysicalDevice PhysicalDevice, VkSurfaceKHR Surface, VkSurfaceFormatKHR *SurfaceFormat, uint32_t *SurfaceFormatScore) {
     VkSurfaceFormatKHR SurfaceFormats[128];
     uint32_t SurfaceFormatScores[ArrayCount(SurfaceFormats)];
@@ -207,25 +223,7 @@ label_Error:
     return 1;
 }
 
-static int VulkanCreateShaderModule(vulkan_surface_device Device, const char *Bytes, uint64_t ByteCount, VkShaderModule *Module) {
-    AssertMessageGoto(ByteCount < (uint64_t)SIZE_T_MAX, label_Error, "Too many bytes in shader code.\n");
-    VkShaderModuleCreateInfo CreateInfo = {
-        .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
-        .pNext = 0,
-        .flags = 0,
-        .codeSize = (size_t)ByteCount,
-        .pCode = (uint32_t *)Bytes
-    };
-    VkShaderModule LocalModule;
-    VulkanCheckGoto(vkCreateShaderModule(Device.Handle, &CreateInfo, 0, &LocalModule), label_Error);
-    *Module = LocalModule;
-
-    return 0;
-
-label_Error:
-    return 1;
-}
-
+// MARK: Memory, Buffers
 static int VulkanGetBufferMemoryTypeIndex(vulkan_surface_device Device, uint32_t MemoryTypeBits, VkMemoryPropertyFlags MemoryPropertyFlags, uint32_t *MemoryTypeIndex) {
      // TODO(blackedout): Make this part of vulkan_surface_device?
     VkPhysicalDeviceMemoryProperties PhysicalDeviceMemoryProperties;
@@ -302,6 +300,7 @@ label_Error:
     return 1;
 }
 
+// MARK: Static Buffers
 static void VulkanDestroyStaticBuffers(vulkan_surface_device Device, vulkan_static_buffers StaticBuffers) {
     vkDestroyBuffer(Device.Handle, StaticBuffers.VertexHandle, 0);
     vkDestroyBuffer(Device.Handle, StaticBuffers.IndexHandle, 0);
@@ -350,7 +349,7 @@ static int VulkanCreateStaticBuffers(vulkan_surface_device Device, vulkan_mesh_s
 
     uint64_t AlignedTotalByteCount = AlignedVertexByteCount + AlignedIndexByteCount;
 
-     VkMemoryAllocateInfo MemoryAllocateInfo = {
+    VkMemoryAllocateInfo MemoryAllocateInfo = {
         .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
         .pNext = 0,
         .allocationSize = AlignedTotalByteCount,
@@ -457,6 +456,186 @@ label_Error:
     return 1;
 }
 
+// MARK: Shaders
+static int VulkanCreateShaderModule(vulkan_surface_device Device, const uint8_t *Bytes, uint64_t ByteCount, VkShaderModule *Module) {
+    AssertMessageGoto(ByteCount < (uint64_t)SIZE_T_MAX, label_Error, "Too many bytes in shader code.\n");
+    VkShaderModuleCreateInfo CreateInfo = {
+        .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+        .pNext = 0,
+        .flags = 0,
+        .codeSize = (size_t)ByteCount,
+        .pCode = (uint32_t *)Bytes
+    };
+    VkShaderModule LocalModule;
+    VulkanCheckGoto(vkCreateShaderModule(Device.Handle, &CreateInfo, 0, &LocalModule), label_Error);
+    *Module = LocalModule;
+
+    return 0;
+
+label_Error:
+    return 1;
+}
+
+static void VulkanDestroyShader(vulkan_surface_device Device, vulkan_shader Shader) {
+    vkDestroyDescriptorPool(Device.Handle, Shader.DescriptorPool, 0);
+    vkDestroyDescriptorSetLayout(Device.Handle, Shader.DescriptorSetLayout, 0);
+    vkUnmapMemory(Device.Handle, Shader.UniformMemory);
+    vkFreeMemory(Device.Handle, Shader.UniformMemory, 0);
+    for(uint32_t I = 0; I < ArrayCount(Shader.UniformBuffers); ++I) {
+        vkDestroyBuffer(Device.Handle, Shader.UniformBuffers[I], 0);
+    }
+    
+    vkDestroyShaderModule(Device.Handle, Shader.Frag, 0);
+    vkDestroyShaderModule(Device.Handle, Shader.Vert, 0);
+}
+
+static int VulkanCreateShader(vulkan_surface_device Device, const uint8_t *BytesVS, uint64_t ByteCountVS, const uint8_t *BytesFS, uint64_t ByteCountFS, uint32_t UniformByteCount, VkDescriptorSetLayoutCreateInfo DescriptorSetLayoutCreateInfo, vulkan_shader *Shader) {
+    VkShaderModule ModuleVS, ModuleFS;
+    CheckGoto(VulkanCreateShaderModule(Device, BytesVS, ByteCountVS, &ModuleVS), label_Error);
+    CheckGoto(VulkanCreateShaderModule(Device, BytesFS, ByteCountFS, &ModuleFS), label_VS);
+
+     VkBufferCreateInfo UniformBufferCreateInfo = {
+        .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+        .pNext = 0,
+        .flags = 0,
+        .size = UniformByteCount,
+        .usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+        .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+        .queueFamilyIndexCount = 0,
+        .pQueueFamilyIndices = 0
+    };
+
+    VkBuffer UniformBuffers[ArrayCount(((vulkan_shader *)0)->UniformBuffers)];
+    uint32_t CreatedUniformBufferCount = 0;
+    for(uint32_t CreatedUniformBufferCount = 0; CreatedUniformBufferCount < ArrayCount(UniformBuffers); ++CreatedUniformBufferCount) {
+        VulkanCheckGoto(vkCreateBuffer(Device.Handle, &UniformBufferCreateInfo, 0, UniformBuffers + CreatedUniformBufferCount), label_Buffers);
+    }
+
+    VkMemoryRequirements UniformMemoryRequirements;
+    vkGetBufferMemoryRequirements(Device.Handle, UniformBuffers[0], &UniformMemoryRequirements);
+
+    uint32_t UniformMemoryTypeIndex;
+    CheckGoto(VulkanGetBufferMemoryTypeIndex(Device, UniformMemoryRequirements.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &UniformMemoryTypeIndex), label_Buffers);
+
+    uint64_t AlignedUniformByteCount = AlignAny(UniformByteCount, uint64_t, UniformMemoryRequirements.alignment);
+    uint64_t TotalUniformByteCount = ArrayCount(UniformBuffers)*AlignedUniformByteCount;
+
+    VkMemoryAllocateInfo UniformMemoryAllocateInfo = {
+        .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+        .pNext = 0,
+        .allocationSize = TotalUniformByteCount,
+        .memoryTypeIndex = UniformMemoryTypeIndex
+    };
+
+    VkDeviceMemory UniformMemory;
+    VulkanCheckGoto(vkAllocateMemory(Device.Handle, &UniformMemoryAllocateInfo, 0, &UniformMemory), label_Buffers);
+
+    for(uint32_t I = 0; I < ArrayCount(UniformBuffers); ++I) {
+        VulkanCheckGoto(vkBindBufferMemory(Device.Handle, UniformBuffers[I], UniformMemory, I*AlignedUniformByteCount), label_Memory);
+    }
+
+    // TODO(blackedout): Map whole buffer or individual chunks?
+    uint8_t *MappedUniformMemory;
+    VulkanCheckGoto(vkMapMemory(Device.Handle, UniformMemory, 0, TotalUniformByteCount, 0, (void **)&MappedUniformMemory), label_Memory);
+
+    VkDescriptorPoolSize DescriptorPoolSizes[] = {
+        {
+            .type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+            .descriptorCount = ArrayCount(UniformBuffers) // NOTE(blackedout): This seems to be the total number per pool, not per set
+        }
+    };
+
+    VkDescriptorPoolCreateInfo DescriptorPoolCreateInfo = {
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+        .pNext = 0,
+        .flags = 0,
+        .maxSets = ArrayCount(UniformBuffers),
+        .poolSizeCount = ArrayCount(DescriptorPoolSizes),
+        .pPoolSizes = DescriptorPoolSizes
+    };
+
+    VkDescriptorSetLayout DescriptorSetLayout;
+    VulkanCheckGoto(vkCreateDescriptorSetLayout(Device.Handle, &DescriptorSetLayoutCreateInfo, 0, &DescriptorSetLayout), label_MemoryMapped);
+
+    VkDescriptorPool DescriptorPool;
+    VulkanCheckGoto(vkCreateDescriptorPool(Device.Handle, &DescriptorPoolCreateInfo, 0, &DescriptorPool), label_DescriptorSetLayout);
+    
+    VkDescriptorSetLayout DescriptorSetLayouts[ArrayCount(UniformBuffers)];
+    for(uint32_t I = 0; I < ArrayCount(DescriptorSetLayouts); ++I) {
+        DescriptorSetLayouts[I] = DescriptorSetLayout;
+    }
+    VkDescriptorSetAllocateInfo DescriptorSetAllocateInfo = {
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+        .pNext = 0,
+        .descriptorPool = DescriptorPool,
+        .descriptorSetCount = ArrayCount(UniformBuffers),
+        .pSetLayouts = DescriptorSetLayouts
+    };
+
+    VkDescriptorSet DescriptorSets[ArrayCount(DescriptorSetLayouts)];
+    VulkanCheckGoto(vkAllocateDescriptorSets(Device.Handle, &DescriptorSetAllocateInfo, DescriptorSets), label_DescriptorPool);
+
+    for(uint32_t I = 0; I < ArrayCount(DescriptorSets); ++I) {
+        VkDescriptorBufferInfo Info = {
+            .buffer = UniformBuffers[I],
+            .offset = 0,
+            .range = UniformByteCount
+        };
+
+        VkWriteDescriptorSet WriteDescriptorSet = {
+            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .pNext = 0,
+            .dstSet = DescriptorSets[I],
+            .dstBinding = 0, // NOTE(blackedout): Uniform binding index (?)
+            .dstArrayElement = 0,
+            .descriptorCount = 1,
+            .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+            .pImageInfo = 0,
+            .pBufferInfo = &Info,
+            .pTexelBufferView = 0
+        };
+
+        vkUpdateDescriptorSets(Device.Handle, 1, &WriteDescriptorSet, 0, 0);
+    }
+
+    vulkan_shader LocalShader = {
+        .Vert = ModuleVS,
+        .Frag = ModuleFS,
+
+        .UniformMemory = UniformMemory,
+
+        .DescriptorPool = DescriptorPool,
+        .DescriptorSetLayout = DescriptorSetLayout
+    };
+    memcpy(LocalShader.UniformBuffers, UniformBuffers, sizeof(UniformBuffers));
+    memcpy(LocalShader.DescriptorSets, DescriptorSets, sizeof(DescriptorSets));
+    for(uint32_t I = 0; I < ArrayCount(UniformBuffers); ++I) {
+        LocalShader.MappedUniformBuffers[I] = MappedUniformMemory + I*AlignedUniformByteCount;
+    }
+    *Shader = LocalShader;
+
+    return 0;
+
+label_DescriptorPool:
+    vkDestroyDescriptorPool(Device.Handle, DescriptorPool, 0);
+label_DescriptorSetLayout:
+    vkDestroyDescriptorSetLayout(Device.Handle, DescriptorSetLayout, 0);
+label_MemoryMapped:
+    vkUnmapMemory(Device.Handle, UniformMemory);
+label_Memory:
+    vkFreeMemory(Device.Handle, UniformMemory, 0);
+label_Buffers:
+    for(uint32_t I = 0; I < CreatedUniformBufferCount; ++I) {
+        vkDestroyBuffer(Device.Handle, UniformBuffers[I], 0);
+    }
+    vkDestroyShaderModule(Device.Handle, ModuleFS, 0);
+label_VS:
+    vkDestroyShaderModule(Device.Handle, ModuleVS, 0);
+label_Error:
+    return 1;
+}
+
+// MARK: Instace
 // NOTE(blackedout): Input the instance extensions that are required by the platform.
 static int VulkanCreateInstance(const char **PlatformInstanceExtensions, uint32_t PlatformInstanceExtensionCount, VkInstance *Instance) {
     const char *InstanceExtensions[16];
@@ -521,6 +700,7 @@ label_Error:
     return 1;
 }
 
+// MARK: Surface Device
 static void VulkanDestroySurfaceDevice(VkInstance Instance, vulkan_surface_device Device) {
     vkDestroySurfaceKHR(Instance, Device.Surface, 0);
     vkDestroyDevice(Device.Handle, 0);
@@ -715,6 +895,7 @@ label_Error:
     return 1;
 }
 
+// MARK: Swapchain
 static void VulkanDestroySwapchain(vulkan_surface_device Device, vulkan_swapchain Swapchain) {
     // NOTE(blackedout): Only destructible if none of its images are acquired.
     AssertMessage(Swapchain.AcquiredImageCount == 0, "Swapchain can't be destroyed because at least one of its imagess is still in use.\n");
@@ -884,97 +1065,15 @@ label_Error:
     return 1;
 }
 
-static void VulkanDestroySwapchainHandler(vulkan_surface_device Device, vulkan_swapchain_handler *SwapchainHandler) {
-    vulkan_swapchain_handler Handler = *SwapchainHandler;
-    for(uint32_t I = 0; I < Handler.SwapchainBufIndices.Count; ++I) {
-        uint32_t CircularIndex = IndicesCircularGet(&Handler.SwapchainBufIndices, I);
-        VulkanDestroySwapchain(Device, Handler.Swapchains[CircularIndex]);
-    }
-
-    for(uint32_t I = 0; I < MAX_ACQUIRED_IMAGE_COUNT; ++I) {
-        vkDestroySemaphore(Device.Handle, SwapchainHandler->ImageAvailableSemaphores[I], 0);
-        vkDestroySemaphore(Device.Handle, SwapchainHandler->RenderFinishedSemaphores[I], 0);
-        vkDestroyFence(Device.Handle, SwapchainHandler->InFlightFences[I], 0);
-    }
-}
-
-static int VulkanCreateSwapchainAndHandler(vulkan_surface_device Device, VkExtent2D InitialExtent, VkRenderPass RenderPass, vulkan_swapchain_handler *SwapchainHandler) {
-    vulkan_swapchain Swapchain;
-    CheckGoto(VulkanCreateSwapchain(Device, InitialExtent, RenderPass, 0, &Swapchain), label_Error);
-
-    vulkan_swapchain_handler Handler = {
-        .RenderPassCount = 1,
-        .RenderPass = RenderPass,
-
-        .SwapchainIndexLastAcquired = UINT32_MAX,
-        .SwapchainBufIndices = {
-            .Cap = MAX_SWAPCHAIN_COUNT,
-            .Count = 1,
-            .Next = 1%MAX_SWAPCHAIN_COUNT
-        },
-        .Swapchains = { Swapchain },
-
-        .AcquiredImageBufIndices = {
-            .Cap = MAX_ACQUIRED_IMAGE_COUNT,
-            .Count = 0,
-            .Next = 0
-        },
-        .AcquiredImageIndices = {0},
-        .AcquiredImageSwapchainIndices = {0},
-    };
-
-    VkSemaphoreCreateInfo UnsignaledSemaphoreCreateInfo = {
-        .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
-        .pNext = 0,
-        .flags = 0
-    };
-
-    VkFenceCreateInfo UnsignaledFenceCreateInfo = {
-        .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
-        .pNext = 0,
-        .flags = 0
-    };
-
-    uint32_t SemaphoresCount, FencesCount;
-    VkSemaphore Semaphores[2*MAX_ACQUIRED_IMAGE_COUNT];
-    VkFence Fences[MAX_ACQUIRED_IMAGE_COUNT];
-    
-    for(SemaphoresCount = 0; SemaphoresCount < ArrayCount(Semaphores); ++SemaphoresCount) {
-        VulkanCheckGoto(vkCreateSemaphore(Device.Handle, &UnsignaledSemaphoreCreateInfo, 0, Semaphores + SemaphoresCount), label_Semaphores);
-    }
-    
-    for(FencesCount = 0; FencesCount < ArrayCount(Fences); ++FencesCount) {
-        VulkanCheckGoto(vkCreateFence(Device.Handle, &UnsignaledFenceCreateInfo, 0, Fences + FencesCount), label_Fences);
-    }
-
-    memcpy(Handler.ImageAvailableSemaphores, Semaphores, MAX_ACQUIRED_IMAGE_COUNT*sizeof(*Semaphores));
-    memcpy(Handler.RenderFinishedSemaphores, Semaphores + MAX_ACQUIRED_IMAGE_COUNT, MAX_ACQUIRED_IMAGE_COUNT*sizeof(*Semaphores));
-    memcpy(Handler.InFlightFences, Fences, MAX_ACQUIRED_IMAGE_COUNT*sizeof(*Fences));
-
-    *SwapchainHandler = Handler;
-
-    return 0;
-
-label_Fences:
-    for(uint32_t I = 0; I < FencesCount; ++I) {
-        vkDestroyFence(Device.Handle, Fences[I], 0);
-    }
-label_Semaphores:
-    for(uint32_t I = 0; I < SemaphoresCount; ++I) {
-        vkDestroySemaphore(Device.Handle, Semaphores[I], 0);
-    }
-    VulkanDestroySwapchain(Device, Swapchain);
-label_Error:
-    return 1;
-}
-
 static void VulkanDestroyDefaultGraphicsPipeline(vulkan_surface_device Device, vulkan_graphics_pipeline_info PipelineInfo) {
     vkDestroyPipeline(Device.Handle, PipelineInfo.Pipeline, 0);
     vkDestroyRenderPass(Device.Handle, PipelineInfo.RenderPass, 0);
     vkDestroyPipelineLayout(Device.Handle, PipelineInfo.Layout, 0);
+    
 }
 
-static int VulkanCreateDefaultGraphicsPipeline(vulkan_surface_device Device, VkShaderModule ModuleVS, VkShaderModule ModuleFS, VkExtent2D InitialExtent, VkFormat SwapchainFormat, VkPipelineVertexInputStateCreateInfo PipelineVertexInputStateCreateInfo, vulkan_graphics_pipeline_info *PipelineInfo) {
+// MARK: Graphics Pipeline
+static int VulkanCreateDefaultGraphicsPipeline(vulkan_surface_device Device, VkShaderModule ModuleVS, VkShaderModule ModuleFS, VkExtent2D InitialExtent, VkFormat SwapchainFormat, VkPipelineVertexInputStateCreateInfo PipelineVertexInputStateCreateInfo, VkDescriptorSetLayout DescriptorSetLayout, vulkan_graphics_pipeline_info *PipelineInfo) {
     VkPipelineShaderStageCreateInfo PipelineStageCreateInfos[] = {
         {
             .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
@@ -1098,12 +1197,12 @@ static int VulkanCreateDefaultGraphicsPipeline(vulkan_surface_device Device, VkS
         .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
         .pNext = 0,
         .flags = 0,
-        .setLayoutCount = 0,
-        .pSetLayouts = 0,
+        .setLayoutCount = 1,
+        .pSetLayouts = &DescriptorSetLayout,
         .pushConstantRangeCount = 0,
         .pPushConstantRanges = 0,
     };
-    VulkanCheckGoto(vkCreatePipelineLayout(Device.Handle, &PipelineLayoutCreateInfo, 0, &LocalPipelineLayout), label_Error);
+    VulkanCheckGoto(vkCreatePipelineLayout(Device.Handle, &PipelineLayoutCreateInfo, 0, &LocalPipelineLayout), label_DescriptorSetLayout);
 
     VkAttachmentDescription AttachmentDescriptions[] = {
         {
@@ -1199,14 +1298,105 @@ label_RenderPass:
     vkDestroyRenderPass(Device.Handle, LocalRenderPass, 0);
 label_PipelineLayout:
     vkDestroyPipelineLayout(Device.Handle, LocalPipelineLayout, 0);
+label_DescriptorSetLayout:
+    vkDestroyDescriptorSetLayout(Device.Handle, DescriptorSetLayout, 0);
 label_Error:
     return 1;
 }
 
-static int VulkanAcquireNextImage(vulkan_surface_device Device, vulkan_swapchain_handler *SwapchainHandler, VkExtent2D FramebufferExtent, VkExtent2D *ImageExtent, VkFramebuffer *Framebuffer) {
+// MARK: Swapch. Handler
+static void VulkanDestroySwapchainHandler(vulkan_surface_device Device, vulkan_swapchain_handler *SwapchainHandler) {
+    vulkan_swapchain_handler Handler = *SwapchainHandler;
+    for(uint32_t I = 0; I < Handler.SwapchainBufIndices.Count; ++I) {
+        uint32_t CircularIndex = IndicesCircularGet(&Handler.SwapchainBufIndices, I);
+        VulkanDestroySwapchain(Device, Handler.Swapchains[CircularIndex]);
+    }
+
+    for(uint32_t I = 0; I < MAX_ACQUIRED_IMAGE_COUNT; ++I) {
+        vkDestroySemaphore(Device.Handle, SwapchainHandler->ImageAvailableSemaphores[I], 0);
+        vkDestroySemaphore(Device.Handle, SwapchainHandler->RenderFinishedSemaphores[I], 0);
+        vkDestroyFence(Device.Handle, SwapchainHandler->InFlightFences[I], 0);
+    }
+}
+
+static int VulkanCreateSwapchainAndHandler(vulkan_surface_device Device, VkExtent2D InitialExtent, VkRenderPass RenderPass, vulkan_swapchain_handler *SwapchainHandler) {
+    vulkan_swapchain Swapchain;
+    CheckGoto(VulkanCreateSwapchain(Device, InitialExtent, RenderPass, 0, &Swapchain), label_Error);
+
+    vulkan_swapchain_handler Handler = {
+        .RenderPassCount = 1,
+        .RenderPass = RenderPass,
+
+        .SwapchainIndexLastAcquired = UINT32_MAX,
+        .SwapchainBufIndices = {
+            .Cap = MAX_SWAPCHAIN_COUNT,
+            .Count = 1,
+            .Next = 1%MAX_SWAPCHAIN_COUNT
+        },
+        .Swapchains = { Swapchain },
+
+        .AcquiredImageBufIndices = {
+            .Cap = MAX_ACQUIRED_IMAGE_COUNT,
+            .Count = 0,
+            .Next = 0
+        },
+        .AcquiredImageIndices = {0},
+        .AcquiredImageSwapchainIndices = {0},
+    };
+
+    VkSemaphoreCreateInfo UnsignaledSemaphoreCreateInfo = {
+        .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
+        .pNext = 0,
+        .flags = 0
+    };
+
+    VkFenceCreateInfo UnsignaledFenceCreateInfo = {
+        .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
+        .pNext = 0,
+        .flags = 0
+    };
+
+    uint32_t SemaphoresCount, FencesCount;
+    VkSemaphore Semaphores[2*MAX_ACQUIRED_IMAGE_COUNT];
+    VkFence Fences[MAX_ACQUIRED_IMAGE_COUNT];
+    
+    for(SemaphoresCount = 0; SemaphoresCount < ArrayCount(Semaphores); ++SemaphoresCount) {
+        VulkanCheckGoto(vkCreateSemaphore(Device.Handle, &UnsignaledSemaphoreCreateInfo, 0, Semaphores + SemaphoresCount), label_Semaphores);
+    }
+    
+    for(FencesCount = 0; FencesCount < ArrayCount(Fences); ++FencesCount) {
+        VulkanCheckGoto(vkCreateFence(Device.Handle, &UnsignaledFenceCreateInfo, 0, Fences + FencesCount), label_Fences);
+    }
+
+    memcpy(Handler.ImageAvailableSemaphores, Semaphores, MAX_ACQUIRED_IMAGE_COUNT*sizeof(*Semaphores));
+    memcpy(Handler.RenderFinishedSemaphores, Semaphores + MAX_ACQUIRED_IMAGE_COUNT, MAX_ACQUIRED_IMAGE_COUNT*sizeof(*Semaphores));
+    memcpy(Handler.InFlightFences, Fences, MAX_ACQUIRED_IMAGE_COUNT*sizeof(*Fences));
+
+    *SwapchainHandler = Handler;
+
+    return 0;
+
+label_Fences:
+    for(uint32_t I = 0; I < FencesCount; ++I) {
+        vkDestroyFence(Device.Handle, Fences[I], 0);
+    }
+label_Semaphores:
+    for(uint32_t I = 0; I < SemaphoresCount; ++I) {
+        vkDestroySemaphore(Device.Handle, Semaphores[I], 0);
+    }
+    VulkanDestroySwapchain(Device, Swapchain);
+label_Error:
+    return 1;
+}
+
+static int VulkanAcquireNextImage(vulkan_surface_device Device, vulkan_swapchain_handler *SwapchainHandler, VkExtent2D FramebufferExtent, VkExtent2D *ImageExtent, VkFramebuffer *Framebuffer, uint32_t *UserImageIndex) {
     vulkan_swapchain_handler Handler = *SwapchainHandler;
 
+    // TODO(blackedout): Think of better names for ImageIndex and AcquiredImageBufIndex
+    // ImageIndex is the index of the acquired image in the array of swapchain images (max is runtime dependent)
+    // AcquiredImageBufIndex is the index into the array of all acquired images (max is the max number of acquired images)
     uint32_t ImageIndex;
+    uint32_t AcquiredImageBufIndex;
     uint32_t SwapchainIndex;
     vulkan_swapchain Swapchain;
     for(;;) {
@@ -1240,7 +1430,7 @@ static int VulkanAcquireNextImage(vulkan_surface_device Device, vulkan_swapchain
             } else VulkanCheckGoto(AcquireResult, label_Error);
 
             // NOTE(blackedout): Image acquisition worked, so push
-            uint32_t AcquiredImageBufIndex = IndicesCircularPush(&Handler.AcquiredImageBufIndices);
+            AcquiredImageBufIndex = IndicesCircularPush(&Handler.AcquiredImageBufIndices);
             Handler.AcquiredImageIndices[AcquiredImageBufIndex] = ImageIndex;
             Handler.AcquiredImageSwapchainIndices[AcquiredImageBufIndex] = SwapchainIndex;
             ++Handler.Swapchains[SwapchainIndex].AcquiredImageCount;
@@ -1254,7 +1444,9 @@ static int VulkanAcquireNextImage(vulkan_surface_device Device, vulkan_swapchain
 
     *ImageExtent = Swapchain.ImageExtent;
     *Framebuffer = Swapchain.Framebuffers[ImageIndex];
+    *UserImageIndex = AcquiredImageBufIndex;
     *SwapchainHandler = Handler;
+    
 
     return 0;
 
