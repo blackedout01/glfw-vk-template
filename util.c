@@ -41,6 +41,103 @@ typedef struct {
     float E[16];
 } m4;
 
+static m4 IdentityM4() {
+    m4 Result = {
+        1.0f, 0.0f, 0.0f, 0.0f,
+        0.0f, 1.0f, 0.0f, 0.0f,
+        0.0f, 0.0f, 1.0f, 0.0f,
+        0.0f, 0.0f, 0.0f, 1.0f
+    };
+    return Result;
+}
+
+static m4 TransposeM4(m4 M) {
+    m4 Result = {
+        M.E[0], M.E[4], M.E[8], M.E[12],
+        M.E[1], M.E[5], M.E[9], M.E[13],
+        M.E[2], M.E[6], M.E[10], M.E[14],
+        M.E[3], M.E[7], M.E[11], M.E[15],
+    };
+    return Result;
+}
+
+static m4 TranslationM4(float X, float Y, float Z) {
+    m4 Result = {
+        1.0f, 0.0f, 0.0f, X,
+        0.0f, 1.0f, 0.0f, Y,
+        0.0f, 0.0f, 1.0f, Z,
+        0.0f, 0.0f, 0.0f, 1.0f
+    };
+    return Result;
+}
+
+static m4 ScaleM4(float Scale, m4 M) {
+    m4 Result = M;
+    for(int I = 0; I < ArrayCount(Result.E); ++I) {
+        Result.E[I] *= Scale;
+    }
+    return Result;
+}
+
+static m4 MultiplyM4M4(m4 A, m4 B) {
+    m4 Result;
+    for(int Row = 0; Row < 4; ++Row) {
+        for(int Col = 0; Col < 4; ++Col) {
+            float Val = 0.0;
+            for(int I = 0; I < 4; ++I) {
+                Val += A.E[4*Row + I]*B.E[4*I + Col];
+            }
+            Result.E[4*Row + Col] = Val;
+        }
+    }
+    return Result;
+}
+
+static m4 AddM4M4(m4 A, m4 B) {
+    m4 Result = A;
+    for(int I = 0; I < ArrayCount(Result.E); ++I) {
+        Result.E[I] += B.E[I];
+    }
+    return Result;
+}
+
+static m4 RotationM4(v3 Axis, float Rad) {
+    m4 K = {
+        0.0, -Axis.E[2], Axis.E[1], 0.0,
+        Axis.E[2], 0.0, -Axis.E[0], 0.0,
+        -Axis.E[1], Axis.E[0], 0.0, 0.0,
+        0.0, 0.0, 0.0, 1.0
+    };
+    m4 KSq = MultiplyM4M4(K, K);
+    
+
+    m4 Result = AddM4M4(IdentityM4(), AddM4M4(ScaleM4(sinf(Rad), K), ScaleM4((1.0f - cosf(Rad)), KSq)));
+    Result.E[15] = 1.0f;
+    return Result;
+}
+
+static m4 ProjectionPersp(float FoVY, float WoH, float N, float F) {
+    // NOTE(blackedout): Vulkan/Direct3D 0, OpenGL -1
+    float NDCzNegN = 0.0f, NDCzNegF = 1.0f;
+    // NOTE(blackedout): Vulkan -1, OpenGL(/Direct3D ?) 1
+    float SignY = -1.0f;
+
+    float TanY = tanf(0.5*FoVY);
+    
+    float SX = 1.0/(WoH*TanY);
+    float SY = 1.0/TanY;
+    float SZ = (NDCzNegF*F - NDCzNegN*N)/(N - F);
+    float TZ = (NDCzNegF - NDCzNegN)*N*F/(N - F);
+    
+    m4 Result = {
+         SX,      0.0,  0.0, 0.0,
+        0.0, SignY*SY,  0.0, 0.0,
+        0.0,      0.0,   SZ,  TZ,
+        0.0,      0.0, -1.0, 0.0
+    };
+    return Result;
+}
+
 typedef struct {
     uint32_t Cap;
     uint32_t Count;

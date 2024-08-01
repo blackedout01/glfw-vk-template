@@ -1436,7 +1436,7 @@ static int VulkanAcquireNextImage(vulkan_surface_device Device, vulkan_swapchain
             ++Handler.Swapchains[SwapchainIndex].AcquiredImageCount;
 
             Handler.SwapchainIndexLastAcquired = SwapchainIndex;
-            printf("acquired image %d (framebuffer %p) from swapchain %d (buf index %d)\n", ImageIndex, Swapchain.Framebuffers[ImageIndex], SwapchainIndex, AcquiredImageBufIndex);
+            //printf("acquired image %d (framebuffer %p) from swapchain %d (buf index %d)\n", ImageIndex, Swapchain.Framebuffers[ImageIndex], SwapchainIndex, AcquiredImageBufIndex);
 
             break;
         }
@@ -1485,11 +1485,11 @@ static int VulkanSubmitFinalAndPresent(vulkan_surface_device Device, vulkan_swap
         .pResults = 0 // NOTE(blackedout): Only needed if multiple swapchains used
     };
 
-    printf("Queueing image %d of swapchain %d for presentaton.\n", PresentInfo.pImageIndices[0], SwapchainIndex);
+    //printf("Queueing image %d of swapchain %d for presentaton.\n", PresentInfo.pImageIndices[0], SwapchainIndex);
     double before = glfwGetTime();
     VkResult PresentResult = vkQueuePresentKHR(GraphicsQueue, &PresentInfo);
     double after = glfwGetTime();
-    printf("Took %f s.\n", after - before);
+    //printf("Took %f s.\n", after - before);
     if(PresentResult == VK_SUBOPTIMAL_KHR || PresentResult == VK_ERROR_OUT_OF_DATE_KHR) {
         // TODO(blackedout): There is still an issue where sometimes the next frame is not rendered (clear color only) when resizing multiple times in quick succession
         vulkan_swapchain NewSwapchain = Handler.Swapchains[SwapchainIndex];

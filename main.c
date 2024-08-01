@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <errno.h>
 #include <string.h>
+#include <math.h>
 
 #include "util.c"
 
@@ -10,31 +11,64 @@
 #include "vulkan.c"
 
 typedef struct {
-    v2 Position;
+    v3 Position;
     v3 Color;
 } vertex;
 static vertex Vertices[] = {
-    { .Position = { -0.5f, 0.5f }, .Color = { 1.0f, 1.0f, 1.0f } },
-    { .Position = { -0.5f, -0.5f }, .Color = { 1.0f, 0.0f, 0.0f } },
-    { .Position = { 0.5f, -0.5f }, .Color = { 0.0f, 1.0f, 0.0f } },
-    { .Position = { 0.5f, 0.5f }, .Color = { 0.0f, 0.0f, 1.0f } },
+    { .Position = { -0.5f, 0.5f, 0.0f }, .Color = { 1.0f, 1.0f, 1.0f } },
+    { .Position = { -0.5f, -0.5f, 0.0f }, .Color = { 1.0f, 0.0f, 0.0f } },
+    { .Position = { 0.5f, -0.5f, 0.0f }, .Color = { 0.0f, 1.0f, 0.0f } },
+    { .Position = { 0.5f, 0.5f, 0.0f }, .Color = { 0.0f, 0.0f, 1.0f } },
 };
 static uint32_t Indices[] = { 0, 3, 2, 2, 1, 0 };
 
 typedef struct {
     m4 M, V, P;
-    v2 A;
-} ubo_mat;
+} ubo_mats;
 
 typedef struct {
     int FramebufferWidth;
     int FramebufferHeight;
+
+    int IsDragging;
+    double LastCursorX, LastCursorY;
+    v2 DragDelta;
+
+    float CamAzi, CamPol;
 
     v2 FocusOffset;
 } context;
 
 static void ErrorCallbackGLFW(int Code, const char *Description) {
     printf("GLFW error %d: %s\n", Code, Description);
+}
+
+static void CursorPositionCallbackGLFW(GLFWwindow *Window, double PosX, double PosY) {
+    context *Context_ = (context *)glfwGetWindowUserPointer(Window);
+    context Context = *Context_;
+
+    double CursorDeltaX = Context.LastCursorX - PosX;
+    double CursorDeltaY = Context.LastCursorY - PosY;
+
+    if(Context.IsDragging) {
+        Context.DragDelta.E[0] += CursorDeltaX;
+        Context.DragDelta.E[1] += CursorDeltaY;
+    }
+
+    Context.LastCursorX = PosX;
+    Context.LastCursorY = PosY;
+    *Context_ = Context;
+}
+
+static void MouseButtonCallbackGLFW(GLFWwindow *Window, int Button, int Action, int Mods) {
+    context *Context_ = (context *)glfwGetWindowUserPointer(Window);
+    context Context = *Context_;
+
+    if(Button == GLFW_MOUSE_BUTTON_LEFT) {
+        Context.IsDragging = Action != GLFW_RELEASE;
+    }
+
+    *Context_ = Context;
 }
 
 static void ScrollCallbackGLFW(GLFWwindow *Window, double OffsetX, double OffsetY) {
@@ -74,7 +108,7 @@ static int LoadShaders(vulkan_surface_device Device, vulkan_shader *Shader) {
         .pBindings = &DescriptorSetLayoutBinding
     };
 
-    uint64_t UniformByteCount = sizeof(ubo_mat);
+    uint64_t UniformByteCount = sizeof(ubo_mats);
     CheckGoto(VulkanCreateShader(Device, BytesVS, ByteCountVS, BytesFS, ByteCountFS, UniformByteCount, DescriptorSetLayoutCreateInfo, Shader), label_Exit);
 
     Result = 0;
@@ -119,6 +153,8 @@ int main() {
     CheckGoto(Window == 0, label_DestroyVulkanInstance);
     context Context = {0};
     glfwSetWindowUserPointer(Window, &Context);
+    glfwSetCursorPosCallback(Window, CursorPositionCallbackGLFW);
+    glfwSetMouseButtonCallback(Window, MouseButtonCallbackGLFW);
     glfwSetScrollCallback(Window, ScrollCallbackGLFW);
     glfwSetFramebufferSizeCallback(Window, FramebufferSizeCallbackGLFW);
 
@@ -146,7 +182,7 @@ int main() {
         {
             .location = 0,
             .binding = 0,
-            .format = VK_FORMAT_R32G32_SFLOAT,
+            .format = VK_FORMAT_R32G32B32_SFLOAT,
             .offset = offsetof(vertex, Position)
         },
         {
@@ -209,7 +245,15 @@ int main() {
     VkExtent2D FramebufferExtent;
     int A = 0;
     while(glfwWindowShouldClose(Window) == 0) {
+        memset(Context.DragDelta.E, 0, sizeof(Context.DragDelta.E));
         glfwPollEvents();
+
+        Context.CamAzi += 0.01f*Context.DragDelta.E[0];
+        Context.CamPol += 0.01f*Context.DragDelta.E[1];
+
+        v3 AxisX = {1.0f, 0.0f, 0.0f};
+        v3 AxisY = {0.0f, 1.0f, 0.0f};
+        m4 ViewRotation = MultiplyM4M4(TranslationM4(0.0f, 0.0f, -5.0f), MultiplyM4M4(RotationM4(AxisX, -Context.CamPol), RotationM4(AxisY, -Context.CamAzi)));
 
         VkExtent2D FramebufferExtent = {
             .width = Context.FramebufferWidth,
@@ -220,7 +264,7 @@ int main() {
         VkFramebuffer AcquiredFramebuffer;
         uint32_t AcquiredImageBufIndex;
         CheckGoto(VulkanAcquireNextImage(VulkanSurfaceDevice, &VulkanSwapchainHandler, FramebufferExtent, &AcquiredImageExtent, &AcquiredFramebuffer, &AcquiredImageBufIndex), label_IdleDestroyAndExit);
-        printf("current (%d, %d), acquired (%d, %d)\n", Context.FramebufferWidth, Context.FramebufferHeight, AcquiredImageExtent.width, AcquiredImageExtent.height);
+        //printf("current (%d, %d), acquired (%d, %d)\n", Context.FramebufferWidth, Context.FramebufferHeight, AcquiredImageExtent.width, AcquiredImageExtent.height);
 
         VulkanCheckGoto(vkResetCommandBuffer(GraphicsCommandBuffer, 0), label_IdleDestroyAndExit);
 
@@ -229,7 +273,8 @@ int main() {
             .extent = AcquiredImageExtent
         };
         VkClearValue RenderClearValue = {
-            .color = { .float32 = { (A & 1), 0.5f*(A & 2), 0.0f, 1.0f } }
+            //.color = { .float32 = { (A & 1), 0.5f*(A & 2), 0.0f, 1.0f } }
+            .color = { .float32 = { 0.0f, 0.0f, 0.0f, 1.0f } }
         };
 
         VkCommandBufferBeginInfo GraphicsCommandBufferBeginInfo = {
@@ -265,9 +310,10 @@ int main() {
             .extent = AcquiredImageExtent,
         };
 
-        ubo_mat *UboMat = VulkanDefaultShader.MappedUniformBuffers[AcquiredImageBufIndex];
-        UboMat->A.E[0] += Context.FocusOffset.E[0];
-        UboMat->A.E[1] += Context.FocusOffset.E[1];
+        ubo_mats *UboMats = VulkanDefaultShader.MappedUniformBuffers[AcquiredImageBufIndex];
+        UboMats->M = TransposeM4(IdentityM4());
+        UboMats->V = TransposeM4(ViewRotation);
+        UboMats->P = TransposeM4(ProjectionPersp(1.1f, Viewport.width/Viewport.height, 0.01f, 100.0f));
         Context.FocusOffset.E[0] = 0.0f;
         Context.FocusOffset.E[1] = 0.0f;
 
@@ -275,7 +321,7 @@ int main() {
         vkCmdBindPipeline(GraphicsCommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, VulkanGraphicsPipelineInfo.Pipeline);
         vkCmdSetViewport(GraphicsCommandBuffer, 0, 1, &Viewport);
         vkCmdSetScissor(GraphicsCommandBuffer, 0, 1, &Scissors);
-        printf("A = %d\n", A);
+        //printf("A = %d\n", A);
         VkDeviceSize VertexBufferOffset = VerticesByteOffset; // TODO(blackedout): Are these byte offsets??
         vkCmdBindVertexBuffers(GraphicsCommandBuffer, 0, 1, &VulkanStaticBuffers.VertexHandle, &VertexBufferOffset);
         vkCmdBindIndexBuffer(GraphicsCommandBuffer, VulkanStaticBuffers.IndexHandle, IndicesByteOffset, VK_INDEX_TYPE_UINT32);
@@ -292,7 +338,7 @@ int main() {
 
         CheckGoto(VulkanSubmitFinalAndPresent(VulkanSurfaceDevice, &VulkanSwapchainHandler, VulkanGraphicsQueue, GraphicsCommandBuffer, FramebufferExtent), label_IdleDestroyAndExit);
         
-        SleepMilliseconds(1000); // NOTE(blackedout): EDITING THIS MIGHT CAUSE IMAGE FLASHING
+        //SleepMilliseconds(1000); // NOTE(blackedout): EDITING THIS MIGHT CAUSE IMAGE FLASHING
     }
 
     Result = 0;
