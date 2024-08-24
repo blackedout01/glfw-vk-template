@@ -1,12 +1,15 @@
 #include <stdint.h>
 
+#define StaticAssert(Condition) struct sas_ ## __LINE__ { int A[((Condition) == 0)]; } 
+
 #define ArrayCount(X) ((sizeof(X)/sizeof(*X)))
+#define MemberArrayCount(TypeName, MemberName) ArrayCount(((TypeName *)0)->MemberName)
 #define Max(X, Y) ((X < Y)? (Y) : (X))
 #define Min(X, Y) ((X < Y)? (X) : (Y))
 #define Clamp(X, A, B) (Max(Min(X, B), A))
 
 #define Align16(X, Type) ((((Type)(X)) + ((Type)15)) & (~((Type)15)))
-#define AlignAny(X, Type, Alignment) (((Type)(X)) + ((Type)(Alignment)) - (((Type)(X)) % ((Type)(Alignment))))
+#define AlignAny(X, Type, Alignment) ((((Type)(X)) + ((Type)(Alignment)) - 1) - ((((Type)(X)) + ((Type)(Alignment)) - 1) % ((Type)(Alignment))))
 
 #define CODE_YELLOW "\033[0;33m"
 #define CODE_RED "\033[0;31m"

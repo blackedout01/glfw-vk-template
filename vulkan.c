@@ -5,6 +5,7 @@
 #define VULKAN_INFO_PRINT
 #define MAX_ACQUIRED_IMAGE_COUNT 1
 #define MAX_SWAPCHAIN_COUNT (MAX_ACQUIRED_IMAGE_COUNT + 1)
+#define MAX_SHADER_COUNT 1
 
 typedef struct {
     VkDevice Handle;
@@ -18,6 +19,9 @@ typedef struct {
 
     VkExtent2D InitialExtent;
     VkSurfaceFormatKHR InitialSurfaceFormat;
+
+    VkPhysicalDeviceFeatures Features;
+    VkPhysicalDeviceProperties Properties;
 } vulkan_surface_device;
 
 typedef struct {
@@ -59,18 +63,7 @@ typedef struct {
 } vulkan_graphics_pipeline_info;
 
 typedef struct {
-    VkShaderModule Vert;
-    VkShaderModule Frag;
-
-    VkDeviceMemory UniformMemory;
-    VkBuffer UniformBuffers[MAX_ACQUIRED_IMAGE_COUNT];
-    void *MappedUniformBuffers[MAX_ACQUIRED_IMAGE_COUNT];
-
-    VkDescriptorSet DescriptorSets[MAX_ACQUIRED_IMAGE_COUNT];
-
-    // NOTE(blackedout): These should probably be moved to an instance that manages all shaders (as well as the uniform buffer memory).
-    VkDescriptorPool DescriptorPool;
-    VkDescriptorSetLayout DescriptorSetLayout;
+    VkShaderModule Vert, Frag;
 } vulkan_shader;
 
 typedef struct {
@@ -85,11 +78,29 @@ typedef struct {
 } vulkan_subbuf;
 
 typedef struct {
+    VkImage Handle;
+    VkImageView ViewHandle;
+    VkImageType Type;
+    VkImageViewType ViewType;
+    VkFormat Format;
+    uint32_t Width;
+    uint32_t Height;
+    uint32_t Depth;
+
+    uint64_t ByteCount;
+    void *Source;
+    uint64_t Offset;
+} vulkan_image;
+
+typedef struct {
     VkBuffer VertexHandle;
     VkBuffer IndexHandle;
 
     uint32_t MemoryCount;
-    VkDeviceMemory MemoryBufs[2];
+    VkDeviceMemory MemoryBufs[3];
+
+    uint32_t ImageCount;
+    vulkan_image *Images;
 } vulkan_static_buffers;
 
 typedef struct {
@@ -240,6 +251,7 @@ static int VulkanGetBufferMemoryTypeIndex(vulkan_surface_device Device, uint32_t
         }
     }
     if(HasMemoryType == 0) {
+        printfc(CODE_RED, "No suitable memory type was found for bits %x.\n", MemoryTypeBits);
         return 1;
     }
 
@@ -301,15 +313,19 @@ label_Error:
 }
 
 // MARK: Static Buffers
-static void VulkanDestroyStaticBuffers(vulkan_surface_device Device, vulkan_static_buffers StaticBuffers) {
-    vkDestroyBuffer(Device.Handle, StaticBuffers.VertexHandle, 0);
-    vkDestroyBuffer(Device.Handle, StaticBuffers.IndexHandle, 0);
+static void VulkanDestroyStaticImagesAndBuffers(vulkan_surface_device Device, vulkan_static_buffers StaticBuffers) {
+    for(uint32_t I = 0; I < StaticBuffers.ImageCount; ++I) {
+        vkDestroyImage(Device.Handle, StaticBuffers.Images[I].Handle, 0);
+        vkDestroyImageView(Device.Handle, StaticBuffers.Images[I].ViewHandle, 0);
+    }
     for(uint32_t I = 0; I < StaticBuffers.MemoryCount; ++I) {
         vkFreeMemory(Device.Handle, StaticBuffers.MemoryBufs[I], 0);
     }
+    vkDestroyBuffer(Device.Handle, StaticBuffers.IndexHandle, 0);
+    vkDestroyBuffer(Device.Handle, StaticBuffers.VertexHandle, 0);
 }
 
-static int VulkanCreateStaticBuffers(vulkan_surface_device Device, vulkan_mesh_subbuf *MeshSubbufs, uint32_t MeshSubbufCount, VkCommandPool TransferCommandPool, VkQueue TransferQueue, vulkan_static_buffers *StaticBuffers) {
+static int VulkanCreateStaticImagesAndBuffers(vulkan_surface_device Device, vulkan_mesh_subbuf *MeshSubbufs, uint32_t MeshSubbufCount, vulkan_image *Images, uint32_t ImageCount, VkCommandPool TransferCommandPool, VkQueue TransferQueue, vulkan_static_buffers *StaticBuffers) {
     uint64_t TotalVertexByteCount = 0;
     uint64_t TotalIndexByteCount = 0;
     for(uint32_t I = 0; I < MeshSubbufCount; ++I) {
@@ -317,6 +333,7 @@ static int VulkanCreateStaticBuffers(vulkan_surface_device Device, vulkan_mesh_s
         TotalIndexByteCount += MeshSubbufs[I].Indices.ByteCount;
     }
 
+    // NOTE(blackedout): Create vertex and index buffers using similar create info
     VkBufferCreateInfo BufferCreateInfo = {
         .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
         .pNext = 0,
@@ -336,6 +353,7 @@ static int VulkanCreateStaticBuffers(vulkan_surface_device Device, vulkan_mesh_s
     VkBuffer IndexBuffer;
     VulkanCheckGoto(vkCreateBuffer(Device.Handle, &BufferCreateInfo, 0, &IndexBuffer), label_VertexBuffer);
 
+    // NOTE(blackedout): Allocate and bind uniform memory with joined vertex and index requirements to the respective buffers 
     VkMemoryRequirements VertexMemoryRequirements, IndexMemoryRequirements;
     vkGetBufferMemoryRequirements(Device.Handle, VertexBuffer, &VertexMemoryRequirements);
     vkGetBufferMemoryRequirements(Device.Handle, IndexBuffer, &IndexMemoryRequirements);
@@ -344,29 +362,109 @@ static int VulkanCreateStaticBuffers(vulkan_surface_device Device, vulkan_mesh_s
     uint32_t BufferMemoryTypeIndex;
     CheckGoto(VulkanGetBufferMemoryTypeIndex(Device, VertexMemoryRequirements.memoryTypeBits & IndexMemoryRequirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &BufferMemoryTypeIndex), label_IndexBuffer);
     
-    uint64_t AlignedVertexByteCount = AlignAny(TotalVertexByteCount, uint64_t, IndexMemoryRequirements.alignment);
-    uint64_t AlignedIndexByteCount = TotalIndexByteCount;
-
-    uint64_t AlignedTotalByteCount = AlignedVertexByteCount + AlignedIndexByteCount;
+    uint64_t VertexByteOffset = 0;
+    uint64_t IndexByteOffset = AlignAny(VertexMemoryRequirements.size, uint64_t, IndexMemoryRequirements.alignment);
+    uint64_t AlignedTotalBuffersByteCount = IndexByteOffset + IndexMemoryRequirements.size;
 
     VkMemoryAllocateInfo MemoryAllocateInfo = {
         .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
         .pNext = 0,
-        .allocationSize = AlignedTotalByteCount,
+        .allocationSize = AlignedTotalBuffersByteCount,
         .memoryTypeIndex = BufferMemoryTypeIndex
     };
-
     VkDeviceMemory BufferMemoryHandle;
     VulkanCheckGoto(vkAllocateMemory(Device.Handle, &MemoryAllocateInfo, 0, &BufferMemoryHandle), label_IndexBuffer);
 
-    VulkanCheckGoto(vkBindBufferMemory(Device.Handle, VertexBuffer, BufferMemoryHandle, 0), label_Memory);
-    VulkanCheckGoto(vkBindBufferMemory(Device.Handle, IndexBuffer, BufferMemoryHandle, AlignedVertexByteCount), label_Memory);
+    VulkanCheckGoto(vkBindBufferMemory(Device.Handle, VertexBuffer, BufferMemoryHandle, VertexByteOffset), label_BufferMemory);
+    VulkanCheckGoto(vkBindBufferMemory(Device.Handle, IndexBuffer, BufferMemoryHandle, IndexByteOffset), label_BufferMemory);
 
+    // NOTE(blackedout): Create image handles, allocate and bind its memory, then create view handles
+    uint64_t AlignedTotalImagesByteCount = 0;
+    uint32_t ImageMemoryTypeBits = ~(uint32_t)0;
+    uint32_t CreatedImageCount = 0;
+    for(uint32_t I = 0; I < ImageCount; ++I) {
+        vulkan_image Image = Images[I];
+        VkImageCreateInfo ImageCreateInfo = {
+            .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+            .pNext = 0,
+            .flags = 0,
+            .imageType = Image.Type,
+            .format = Image.Format,
+            .extent.width = Image.Width,
+            .extent.height = Image.Height,
+            .extent.depth = Image.Depth,
+            .mipLevels = 1,
+            .arrayLayers = 1,
+            .samples = VK_SAMPLE_COUNT_1_BIT,
+            .tiling = VK_IMAGE_TILING_OPTIMAL,
+            .usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+            .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+            .queueFamilyIndexCount = 0,
+            .pQueueFamilyIndices = 0,
+            .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED
+        };
+
+        VulkanCheckGoto(vkCreateImage(Device.Handle, &ImageCreateInfo, 0, &Image.Handle), label_Images);
+        ++CreatedImageCount;
+
+        VkMemoryRequirements ImageMemoryRequirements;
+        vkGetImageMemoryRequirements(Device.Handle, Image.Handle, &ImageMemoryRequirements);
+
+        uint64_t ByteOffset = AlignAny(AlignedTotalImagesByteCount, uint64_t, ImageMemoryRequirements.alignment);
+        AlignedTotalImagesByteCount += ByteOffset + ImageMemoryRequirements.size;
+        Image.Offset = ByteOffset;
+
+        // TODO(blackedout): Handle this getting too restrictive
+        ImageMemoryTypeBits &= ImageMemoryRequirements.memoryTypeBits;
+
+        Images[I] = Image;
+    }
+    uint32_t ImageMemoryTypeIndex;
+    CheckGoto(VulkanGetBufferMemoryTypeIndex(Device, ImageMemoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &ImageMemoryTypeIndex), label_Images);
+    VkMemoryAllocateInfo ImageMemoryAllocateInfo = {
+        .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+        .pNext = 0,
+        .allocationSize = AlignedTotalImagesByteCount,
+        .memoryTypeIndex = ImageMemoryTypeIndex
+    };
+    VkDeviceMemory ImageMemoryHandle;
+    VulkanCheckGoto(vkAllocateMemory(Device.Handle, &ImageMemoryAllocateInfo, 0, &ImageMemoryHandle), label_Images);
+    for(uint32_t I = 0; I < ImageCount; ++I) {
+        VulkanCheckGoto(vkBindImageMemory(Device.Handle, Images[I].Handle, ImageMemoryHandle, Images[I].Offset), label_ImageMemory);
+    }
+
+    uint32_t CreatedImageViewCount = 0;
+    for(uint32_t I = 0; I < ImageCount; ++I) {
+        vulkan_image Image = Images[I];
+        VkImageViewCreateInfo ImageViewCreateInfo = {
+            .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+            .pNext = 0,
+            .flags = 0,
+            .image = Image.Handle,
+            .viewType = Image.ViewType,
+            .format = Image.Format,
+            .components = { .r = VK_COMPONENT_SWIZZLE_IDENTITY, .g = VK_COMPONENT_SWIZZLE_IDENTITY, .b = VK_COMPONENT_SWIZZLE_IDENTITY, .a = VK_COMPONENT_SWIZZLE_IDENTITY },
+            .subresourceRange = {
+                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                .baseMipLevel = 0,
+                .levelCount = 1,
+                .baseArrayLayer = 0,
+                .layerCount = 1,
+            }
+        };
+
+        VulkanCheckGoto(vkCreateImageView(Device.Handle, &ImageViewCreateInfo, 0, &Image.ViewHandle), label_ImageViews);
+        ++CreatedImageViewCount;
+
+        Images[I] = Image;
+    }
+
+    // NOTE(blackedout): Create and fill staging buffer
     vulkan_buffer StagingBuffer;
-    CheckGoto(VulkanCreateExlusiveBufferWithMemory(Device, AlignedTotalByteCount, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &StagingBuffer), label_Memory);
+    CheckGoto(VulkanCreateExlusiveBufferWithMemory(Device, AlignedTotalBuffersByteCount + AlignedTotalImagesByteCount, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &StagingBuffer), label_ImageMemory);
 
     void *MappedStagingBuffer;
-    VulkanCheckGoto(vkMapMemory(Device.Handle, StagingBuffer.Memory, 0, AlignedTotalByteCount, 0, &MappedStagingBuffer), label_StagingBuffer);
+    VulkanCheckGoto(vkMapMemory(Device.Handle, StagingBuffer.Memory, 0, AlignedTotalBuffersByteCount, 0, &MappedStagingBuffer), label_StagingBuffer);
     uint64_t VertexOffset = 0, IndexOffset = 0;
     for(uint32_t I = 0; I < MeshSubbufCount; ++I) {
         vulkan_mesh_subbuf Subbuf = MeshSubbufs[I];
@@ -376,13 +474,19 @@ static int VulkanCreateStaticBuffers(vulkan_surface_device Device, vulkan_mesh_s
             VertexOffset += Subbuf.Vertices.ByteCount;
         }
         if(Subbuf.Indices.Source && Subbuf.Indices.ByteCount > 0) {
-            memcpy(MappedStagingBuffer + AlignedVertexByteCount + IndexOffset, Subbuf.Indices.Source, Subbuf.Indices.ByteCount);
+            memcpy(MappedStagingBuffer + IndexByteOffset + IndexOffset, Subbuf.Indices.Source, Subbuf.Indices.ByteCount);
             *Subbuf.Indices.OffsetPointer = IndexOffset;
             IndexOffset += Subbuf.Indices.ByteCount;
         }
     }
+    uint64_t ImageOffset = 0;
+    for(uint32_t I = 0; I < ImageCount; ++I) {
+        memcpy(MappedStagingBuffer + AlignedTotalBuffersByteCount + ImageOffset, Images[I].Source, Images[I].ByteCount);
+        ImageOffset = Images[I].ByteCount;
+    }
     vkUnmapMemory(Device.Handle, StagingBuffer.Memory);
 
+    // NOTE(blackedout): Allocate transfer command buffer, record transfer of data, submit and wait for completion
     VkCommandBufferAllocateInfo TransferCommandBufferAllocateInfo = {
         .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
         .pNext = 0,
@@ -401,17 +505,73 @@ static int VulkanCreateStaticBuffers(vulkan_surface_device Device, vulkan_mesh_s
     };
     VulkanCheckGoto(vkBeginCommandBuffer(TransferCommandBuffer, &TransferBeginInfo), label_CommandBuffer);
     VkBufferCopy VertexBufferCopy = {
-        .srcOffset = 0,
+        .srcOffset = VertexByteOffset,
         .dstOffset = 0,
         .size = TotalVertexByteCount
     };
     VkBufferCopy IndexBufferCopy = {
-        .srcOffset = AlignedVertexByteCount,
+        .srcOffset = IndexByteOffset,
         .dstOffset = 0,
         .size = TotalIndexByteCount
     };
     vkCmdCopyBuffer(TransferCommandBuffer, StagingBuffer.Handle, VertexBuffer, 1, &VertexBufferCopy);
     vkCmdCopyBuffer(TransferCommandBuffer, StagingBuffer.Handle, IndexBuffer, 1, &IndexBufferCopy);
+
+    // TODO(blackedout): Get a better understanding of access synchronization
+    // https://www.cg.tuwien.ac.at/courses/EinfCG/slides/VulkanLectureSeries/ECG2021_VK05_PipelinesAndStages.pdf
+    // https://themaister.net/blog/2019/08/14/yet-another-blog-explaining-vulkan-synchronization/
+    for(uint32_t I = 0; I < ImageCount; ++I) {
+        VkImageMemoryBarrier ImageMemoryBarrier = {
+            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+            .pNext = 0,
+            .srcAccessMask = 0,
+            .dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+            .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+            .newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .image = Images[I].Handle,
+            .subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+            .subresourceRange.baseMipLevel = 0,
+            .subresourceRange.levelCount = 1,
+            .subresourceRange.baseArrayLayer = 0,
+            .subresourceRange.layerCount = 1,
+        };
+        vkCmdPipelineBarrier(TransferCommandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, 0, 0, 0, 1, &ImageMemoryBarrier);
+    }
+    for(uint32_t I = 0; I < ImageCount; ++I) {
+        VkBufferImageCopy BufferImageCopy = {
+            .bufferOffset = AlignedTotalBuffersByteCount + Images[I].Offset,
+            .bufferRowLength = 0,
+            .bufferImageHeight = 0,
+            .imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+            .imageSubresource.mipLevel = 0,
+            .imageSubresource.baseArrayLayer = 0,
+            .imageSubresource.layerCount = 1,
+            .imageOffset = { 0, 0, 0 },
+            .imageExtent = { Images[I].Width, Images[I].Height, Images[I].Depth } // TODO
+        };
+        vkCmdCopyBufferToImage(TransferCommandBuffer, StagingBuffer.Handle, Images[I].Handle, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &BufferImageCopy);
+    }
+    for(uint32_t I = 0; I < ImageCount; ++I) {
+        VkImageMemoryBarrier ImageMemoryBarrier = {
+            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+            .pNext = 0,
+            .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+            .dstAccessMask = VK_ACCESS_SHADER_READ_BIT,
+            .oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            .newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .image = Images[I].Handle,
+            .subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+            .subresourceRange.baseMipLevel = 0,
+            .subresourceRange.levelCount = 1,
+            .subresourceRange.baseArrayLayer = 0,
+            .subresourceRange.layerCount = 1,
+        };
+        vkCmdPipelineBarrier(TransferCommandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, 0, 0, 0, 1, &ImageMemoryBarrier);
+    }
     VulkanCheckGoto(vkEndCommandBuffer(TransferCommandBuffer), label_CommandBuffer);
 
     VkSubmitInfo TransferSubmitInfo = {
@@ -432,8 +592,11 @@ static int VulkanCreateStaticBuffers(vulkan_surface_device Device, vulkan_mesh_s
     vulkan_static_buffers LocalStaticBuffers = {
         .VertexHandle = VertexBuffer,
         .IndexHandle = IndexBuffer,
-        .MemoryCount = 1,
-        .MemoryBufs = { BufferMemoryHandle, VULKAN_NULL_HANDLE }
+        .MemoryCount = 2,
+        .MemoryBufs = { BufferMemoryHandle, ImageMemoryHandle, VULKAN_NULL_HANDLE },
+
+        .ImageCount = ImageCount,
+        .Images = Images
     };
     *StaticBuffers = LocalStaticBuffers;
 
@@ -446,7 +609,17 @@ label_CommandBuffer:
     vkFreeCommandBuffers(Device.Handle, TransferCommandPool, 1, &TransferCommandBuffer);
 label_StagingBuffer:
     VulkanDestroyBuffer(Device, StagingBuffer);
-label_Memory:
+label_ImageViews:
+    for(uint32_t I = 0; I < CreatedImageViewCount; ++I) {
+        vkDestroyImageView(Device.Handle, Images[I].ViewHandle, 0);
+    }
+label_ImageMemory:
+    vkFreeMemory(Device.Handle, ImageMemoryHandle, 0);
+label_Images:
+    for(uint32_t I = 0; I < CreatedImageCount; ++I) {
+        vkDestroyImage(Device.Handle, Images[I].Handle, 0);
+    }
+label_BufferMemory:
     vkFreeMemory(Device.Handle, BufferMemoryHandle, 0);
 label_IndexBuffer:
     vkDestroyBuffer(Device.Handle, IndexBuffer, 0);
@@ -476,162 +649,206 @@ label_Error:
     return 1;
 }
 
-static void VulkanDestroyShader(vulkan_surface_device Device, vulkan_shader Shader) {
-    vkDestroyDescriptorPool(Device.Handle, Shader.DescriptorPool, 0);
-    vkDestroyDescriptorSetLayout(Device.Handle, Shader.DescriptorSetLayout, 0);
-    vkUnmapMemory(Device.Handle, Shader.UniformMemory);
-    vkFreeMemory(Device.Handle, Shader.UniformMemory, 0);
-    for(uint32_t I = 0; I < ArrayCount(Shader.UniformBuffers); ++I) {
-        vkDestroyBuffer(Device.Handle, Shader.UniformBuffers[I], 0);
+typedef struct {
+    VkDescriptorSetLayoutCreateFlags Flags;
+    VkDescriptorSetLayoutBinding *Bindings;
+    uint32_t BindingsCount;
+} vulkan_descriptor_set_layout_description;
+
+static void VulkanDestroyDescriptorSetLayouts(vulkan_surface_device Device, VkDescriptorSetLayout *DescriptorSetLayouts, uint32_t Count) {
+    for(uint32_t I = 0; I < Count; ++I) {
+        vkDestroyDescriptorSetLayout(Device.Handle, DescriptorSetLayouts[I], 0);
     }
-    
-    vkDestroyShaderModule(Device.Handle, Shader.Frag, 0);
-    vkDestroyShaderModule(Device.Handle, Shader.Vert, 0);
 }
 
-static int VulkanCreateShader(vulkan_surface_device Device, const uint8_t *BytesVS, uint64_t ByteCountVS, const uint8_t *BytesFS, uint64_t ByteCountFS, uint32_t UniformByteCount, VkDescriptorSetLayoutCreateInfo DescriptorSetLayoutCreateInfo, vulkan_shader *Shader) {
-    VkShaderModule ModuleVS, ModuleFS;
-    CheckGoto(VulkanCreateShaderModule(Device, BytesVS, ByteCountVS, &ModuleVS), label_Error);
-    CheckGoto(VulkanCreateShaderModule(Device, BytesFS, ByteCountFS, &ModuleFS), label_VS);
+static int VulkanCreateDescriptorSetLayouts(vulkan_surface_device Device, vulkan_descriptor_set_layout_description *Descriptions, uint32_t Count, VkDescriptorSetLayout *DescriptorSetLayouts) {
+    VkDescriptorSetLayoutCreateInfo DescriptorSetLayoutCreateInfo = {
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+        .pNext = 0,
+        .flags = 0,
+        .bindingCount = 0,
+        .pBindings = 0
+    };
 
-     VkBufferCreateInfo UniformBufferCreateInfo = {
+    uint32_t CreatedCount;
+    for(CreatedCount = 0; CreatedCount < Count; ++CreatedCount) {
+        vulkan_descriptor_set_layout_description Description = Descriptions[CreatedCount];
+        DescriptorSetLayoutCreateInfo.flags = Description.Flags;
+        DescriptorSetLayoutCreateInfo.bindingCount = Description.BindingsCount;
+        DescriptorSetLayoutCreateInfo.pBindings = Description.Bindings;
+        
+        VulkanCheckGoto(vkCreateDescriptorSetLayout(Device.Handle, &DescriptorSetLayoutCreateInfo, 0, DescriptorSetLayouts + CreatedCount), label_Error);
+    }
+
+    return 0;
+
+label_Error:
+    VulkanDestroyDescriptorSetLayouts(Device, DescriptorSetLayouts, CreatedCount);
+    return 1;
+}
+
+typedef struct {
+    VkBuffer *Buffers;
+    void **MappedBuffers;
+    VkDescriptorSet *DescriptorSets;
+    uint32_t BindingIndex;
+    VkDeviceSize Size;
+} vulkan_shader_uniform_buffers_description;
+
+static int VulkanCreateShaderUniformBuffers(vulkan_surface_device Device, VkDescriptorSetLayout DescriptorSetLayout, vulkan_shader_uniform_buffers_description *Descriptions, uint32_t Count, VkDeviceMemory *BufferMemory, VkDescriptorPool *DescriptorPool) {
+    VkBufferCreateInfo BufferCreateInfo = {
         .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
         .pNext = 0,
         .flags = 0,
-        .size = UniformByteCount,
+        .size = 0,
         .usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
         .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
         .queueFamilyIndexCount = 0,
         .pQueueFamilyIndices = 0
     };
 
-    VkBuffer UniformBuffers[ArrayCount(((vulkan_shader *)0)->UniformBuffers)];
-    uint32_t CreatedUniformBufferCount = 0;
-    for(uint32_t CreatedUniformBufferCount = 0; CreatedUniformBufferCount < ArrayCount(UniformBuffers); ++CreatedUniformBufferCount) {
-        VulkanCheckGoto(vkCreateBuffer(Device.Handle, &UniformBufferCreateInfo, 0, UniformBuffers + CreatedUniformBufferCount), label_Buffers);
+    uint32_t CreatedCount = 0;
+    VkDeviceSize TotalByteCount = 0;
+    uint32_t CommonMemoryTypeBits = ~(uint32_t)0; // TODO(blackedout): Do multiple allocations if needed.
+    for(uint32_t I = 0; I < Count; ++I) {
+        vulkan_shader_uniform_buffers_description Description = Descriptions[I];
+        BufferCreateInfo.size = Description.Size;
+        
+        for(uint32_t J = 0; J < MAX_ACQUIRED_IMAGE_COUNT; ++J) {
+            VkBuffer Buffer;
+            VulkanCheckGoto(vkCreateBuffer(Device.Handle, &BufferCreateInfo, 0, &Buffer), label_Buffers);
+            Description.Buffers[J] = Buffer;
+            ++CreatedCount;
+        }
+
+        VkMemoryRequirements MemoryRequirements;
+        vkGetBufferMemoryRequirements(Device.Handle, Description.Buffers[0], &MemoryRequirements);
+
+        CommonMemoryTypeBits &= MemoryRequirements.memoryTypeBits;
+
+        for(uint32_t J = 0; J < MAX_ACQUIRED_IMAGE_COUNT; ++J) {
+            uint64_t UniformBufferOffset = AlignAny(TotalByteCount, uint64_t, MemoryRequirements.alignment);
+            TotalByteCount = UniformBufferOffset + MemoryRequirements.size;
+
+            // NOTE(blackedout): First, just store offset in pointer. Later, add base address
+            Description.MappedBuffers[J] = (void *)UniformBufferOffset;
+        }
     }
 
-    VkMemoryRequirements UniformMemoryRequirements;
-    vkGetBufferMemoryRequirements(Device.Handle, UniformBuffers[0], &UniformMemoryRequirements);
+    uint32_t MemoryTypeIndex;
+    CheckGoto(VulkanGetBufferMemoryTypeIndex(Device, CommonMemoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &MemoryTypeIndex), label_Buffers);
 
-    uint32_t UniformMemoryTypeIndex;
-    CheckGoto(VulkanGetBufferMemoryTypeIndex(Device, UniformMemoryRequirements.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &UniformMemoryTypeIndex), label_Buffers);
-
-    uint64_t AlignedUniformByteCount = AlignAny(UniformByteCount, uint64_t, UniformMemoryRequirements.alignment);
-    uint64_t TotalUniformByteCount = ArrayCount(UniformBuffers)*AlignedUniformByteCount;
-
-    VkMemoryAllocateInfo UniformMemoryAllocateInfo = {
+    VkMemoryAllocateInfo MemoryAllocateInfo = {
         .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
         .pNext = 0,
-        .allocationSize = TotalUniformByteCount,
-        .memoryTypeIndex = UniformMemoryTypeIndex
+        .allocationSize = TotalByteCount,
+        .memoryTypeIndex = MemoryTypeIndex
     };
 
-    VkDeviceMemory UniformMemory;
-    VulkanCheckGoto(vkAllocateMemory(Device.Handle, &UniformMemoryAllocateInfo, 0, &UniformMemory), label_Buffers);
-
-    for(uint32_t I = 0; I < ArrayCount(UniformBuffers); ++I) {
-        VulkanCheckGoto(vkBindBufferMemory(Device.Handle, UniformBuffers[I], UniformMemory, I*AlignedUniformByteCount), label_Memory);
-    }
+    VkDeviceMemory Memory;
+    VulkanCheckGoto(vkAllocateMemory(Device.Handle, &MemoryAllocateInfo, 0, &Memory), label_Buffers);
 
     // TODO(blackedout): Map whole buffer or individual chunks?
-    uint8_t *MappedUniformMemory;
-    VulkanCheckGoto(vkMapMemory(Device.Handle, UniformMemory, 0, TotalUniformByteCount, 0, (void **)&MappedUniformMemory), label_Memory);
+    uint8_t *MappedMemory;
+    VulkanCheckGoto(vkMapMemory(Device.Handle, Memory, 0, TotalByteCount, 0, (void **)&MappedMemory), label_Memory);
 
+    for(uint32_t I = 0; I < Count; ++I) {
+        for(uint32_t J = 0; J < MAX_ACQUIRED_IMAGE_COUNT; ++J) {
+            vulkan_shader_uniform_buffers_description Description = Descriptions[I];
+
+            uint64_t Offset = (uint64_t)Description.MappedBuffers[J];
+            VulkanCheckGoto(vkBindBufferMemory(Device.Handle, Description.Buffers[J], Memory, Offset), label_Memory);
+            Description.MappedBuffers[J] = (void *)(MappedMemory + Offset);
+        }
+    }
+
+    // NOTE(blackedout): Create uniform descriptor pool and sets
+    uint32_t TotalBufferCount = Count*MAX_ACQUIRED_IMAGE_COUNT;
     VkDescriptorPoolSize DescriptorPoolSizes[] = {
         {
             .type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-            .descriptorCount = ArrayCount(UniformBuffers) // NOTE(blackedout): This seems to be the total number per pool, not per set
-        }
+            // NOTE(blackedout): This seems to be the total number per pool, not per set
+            .descriptorCount = TotalBufferCount
+        },
     };
 
     VkDescriptorPoolCreateInfo DescriptorPoolCreateInfo = {
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
         .pNext = 0,
         .flags = 0,
-        .maxSets = ArrayCount(UniformBuffers),
+        .maxSets = TotalBufferCount,
         .poolSizeCount = ArrayCount(DescriptorPoolSizes),
         .pPoolSizes = DescriptorPoolSizes
     };
 
-    VkDescriptorSetLayout DescriptorSetLayout;
-    VulkanCheckGoto(vkCreateDescriptorSetLayout(Device.Handle, &DescriptorSetLayoutCreateInfo, 0, &DescriptorSetLayout), label_MemoryMapped);
-
-    VkDescriptorPool DescriptorPool;
-    VulkanCheckGoto(vkCreateDescriptorPool(Device.Handle, &DescriptorPoolCreateInfo, 0, &DescriptorPool), label_DescriptorSetLayout);
+    VkDescriptorPool LocalDescriptorPool;
+    VulkanCheckGoto(vkCreateDescriptorPool(Device.Handle, &DescriptorPoolCreateInfo, 0, &LocalDescriptorPool), label_Memory);    
     
-    VkDescriptorSetLayout DescriptorSetLayouts[ArrayCount(UniformBuffers)];
-    for(uint32_t I = 0; I < ArrayCount(DescriptorSetLayouts); ++I) {
-        DescriptorSetLayouts[I] = DescriptorSetLayout;
+    VkDescriptorSetLayout DescriptorSetLayouts[MAX_ACQUIRED_IMAGE_COUNT];
+    for(uint32_t J = 0; J < ArrayCount(DescriptorSetLayouts); ++J) {
+        DescriptorSetLayouts[J] = DescriptorSetLayout;
     }
-    VkDescriptorSetAllocateInfo DescriptorSetAllocateInfo = {
-        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
-        .pNext = 0,
-        .descriptorPool = DescriptorPool,
-        .descriptorSetCount = ArrayCount(UniformBuffers),
-        .pSetLayouts = DescriptorSetLayouts
-    };
+    for(uint32_t I = 0; I < Count; ++I) {
+        vulkan_shader_uniform_buffers_description Description = Descriptions[I];
 
-    VkDescriptorSet DescriptorSets[ArrayCount(DescriptorSetLayouts)];
-    VulkanCheckGoto(vkAllocateDescriptorSets(Device.Handle, &DescriptorSetAllocateInfo, DescriptorSets), label_DescriptorPool);
-
-    for(uint32_t I = 0; I < ArrayCount(DescriptorSets); ++I) {
-        VkDescriptorBufferInfo Info = {
-            .buffer = UniformBuffers[I],
-            .offset = 0,
-            .range = UniformByteCount
-        };
-
-        VkWriteDescriptorSet WriteDescriptorSet = {
-            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+        VkDescriptorSetAllocateInfo DescriptorSetAllocateInfo = {
+            .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
             .pNext = 0,
-            .dstSet = DescriptorSets[I],
-            .dstBinding = 0, // NOTE(blackedout): Uniform binding index (?)
-            .dstArrayElement = 0,
-            .descriptorCount = 1,
-            .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-            .pImageInfo = 0,
-            .pBufferInfo = &Info,
-            .pTexelBufferView = 0
+            .descriptorPool = LocalDescriptorPool,
+            .descriptorSetCount = ArrayCount(DescriptorSetLayouts),
+            .pSetLayouts = DescriptorSetLayouts
         };
 
-        vkUpdateDescriptorSets(Device.Handle, 1, &WriteDescriptorSet, 0, 0);
+        VkDescriptorSet DescriptorSets[ArrayCount(DescriptorSetLayouts)];
+        VulkanCheckGoto(vkAllocateDescriptorSets(Device.Handle, &DescriptorSetAllocateInfo, DescriptorSets), label_DescriptorPool);
+
+        VkDescriptorBufferInfo BufferInfo = {
+            .buffer = VULKAN_NULL_HANDLE,
+            .offset = 0,
+            .range = Description.Size
+        };
+        for(uint32_t J = 0; J < ArrayCount(DescriptorSets); ++J) {
+            BufferInfo.buffer = Description.Buffers[J];
+
+            VkWriteDescriptorSet WriteDescriptorSets[] = {
+                {
+                    .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                    .pNext = 0,
+                    .dstSet = DescriptorSets[I],
+                    .dstBinding = Description.BindingIndex, // NOTE(blackedout): Uniform binding index (?)
+                    .dstArrayElement = 0,
+                    .descriptorCount = 1,
+                    .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+                    .pImageInfo = 0,
+                    .pBufferInfo = &BufferInfo,
+                    .pTexelBufferView = 0
+                },
+            };
+
+            vkUpdateDescriptorSets(Device.Handle, ArrayCount(WriteDescriptorSets), WriteDescriptorSets, 0, 0);
+        }
+        memcpy(Description.DescriptorSets, DescriptorSets, sizeof(DescriptorSets));
     }
 
-    vulkan_shader LocalShader = {
-        .Vert = ModuleVS,
-        .Frag = ModuleFS,
-
-        .UniformMemory = UniformMemory,
-
-        .DescriptorPool = DescriptorPool,
-        .DescriptorSetLayout = DescriptorSetLayout
-    };
-    memcpy(LocalShader.UniformBuffers, UniformBuffers, sizeof(UniformBuffers));
-    memcpy(LocalShader.DescriptorSets, DescriptorSets, sizeof(DescriptorSets));
-    for(uint32_t I = 0; I < ArrayCount(UniformBuffers); ++I) {
-        LocalShader.MappedUniformBuffers[I] = MappedUniformMemory + I*AlignedUniformByteCount;
-    }
-    *Shader = LocalShader;
-
+    *BufferMemory = Memory;
+    *DescriptorPool = LocalDescriptorPool;
     return 0;
 
 label_DescriptorPool:
-    vkDestroyDescriptorPool(Device.Handle, DescriptorPool, 0);
-label_DescriptorSetLayout:
-    vkDestroyDescriptorSetLayout(Device.Handle, DescriptorSetLayout, 0);
-label_MemoryMapped:
-    vkUnmapMemory(Device.Handle, UniformMemory);
+    vkDestroyDescriptorPool(Device.Handle, LocalDescriptorPool, 0);
+    *DescriptorPool = VULKAN_NULL_HANDLE;
 label_Memory:
-    vkFreeMemory(Device.Handle, UniformMemory, 0);
+    vkFreeMemory(Device.Handle, Memory, 0);
+    *BufferMemory = VULKAN_NULL_HANDLE;
 label_Buffers:
-    for(uint32_t I = 0; I < CreatedUniformBufferCount; ++I) {
-        vkDestroyBuffer(Device.Handle, UniformBuffers[I], 0);
+    for(uint32_t I = 0; I < CreatedCount; ++I) {
+        vulkan_shader_uniform_buffers_description Description = Descriptions[I / MAX_ACQUIRED_IMAGE_COUNT];
+        uint32_t BufferIndex = (I % MAX_ACQUIRED_IMAGE_COUNT);
+
+        vkDestroyBuffer(Device.Handle, Description.Buffers[BufferIndex], 0);
+        Description.Buffers[BufferIndex] = VULKAN_NULL_HANDLE;
+        Description.MappedBuffers[BufferIndex] = 0;
     }
-    vkDestroyShaderModule(Device.Handle, ModuleFS, 0);
-label_VS:
-    vkDestroyShaderModule(Device.Handle, ModuleVS, 0);
-label_Error:
     return 1;
 }
 
@@ -712,23 +929,27 @@ static int VulkanCreateSurfaceDevice(VkInstance Instance, VkSurfaceKHR Surface, 
     // The physical device is picked by scoring its type, available surface formats and present modes.
 
     VkPhysicalDevice PhysicalDevices[16];
-    uint32_t PhyiscalDeviceScores[ArrayCount(PhysicalDevices)];
+    uint32_t PhysicalDeviceScores[ArrayCount(PhysicalDevices)];
     uint32_t PhysicalDeviceCount = ArrayCount(PhysicalDevices);
     VulkanCheckGotoIncompleteWarn(vkEnumeratePhysicalDevices(Instance, &PhysicalDeviceCount, PhysicalDevices), label_Error);
     AssertMessageGoto(PhysicalDeviceCount > 0, label_Error, "Vulkan says there are no GPUs.\n");
 
-    uint32_t BestPhyiscalDeviceGraphicsQueueIndex;
-    uint32_t BestPhyiscalDeviceSurfaceQueueIndex;
-    int BestPhyiscalDeviceHasPortabilitySubsetExtension;
-    VkSurfaceFormatKHR BestPhyiscalDeviceInitialSurfaceFormat;
+    uint32_t BestPhysicalDeviceGraphicsQueueIndex;
+    uint32_t BestPhysicalDeviceSurfaceQueueIndex;
+    int BestPhysicalDeviceHasPortabilitySubsetExtension;
+    VkSurfaceFormatKHR BestPhysicalDeviceInitialSurfaceFormat;
+    VkPhysicalDeviceProperties BestPhysicalDeviceProperties;
+    VkPhysicalDeviceFeatures BestPhysicalDeviceFeatures;
 
-    uint32_t BestPhyiscalDeviceScore = 0;
-    VkPhysicalDevice BestPhyiscalDevice = PhysicalDevices[0];
+    uint32_t BestPhysicalDeviceScore = 0;
+    VkPhysicalDevice BestPhysicalDevice = PhysicalDevices[0];
     for(uint32_t I = 0; I < PhysicalDeviceCount; ++I) {
         VkPhysicalDevice PhysicalDevice = PhysicalDevices[I];
 
+        VkPhysicalDeviceFeatures Features;
+        vkGetPhysicalDeviceFeatures(PhysicalDevice, &Features);
         VkPhysicalDeviceProperties Props;
-        vkGetPhysicalDeviceProperties(PhysicalDevice, &Props);
+        vkGetPhysicalDeviceProperties(PhysicalDevice, &Props);        
 
         VkQueueFamilyProperties DeviceQueueFamilyProperties[8];
         uint32_t DeviceQueueFamilyPropertyCount = ArrayCount(DeviceQueueFamilyProperties);
@@ -795,36 +1016,44 @@ static int VulkanCreateSurfaceDevice(VkInstance Instance, VkSurfaceKHR Surface, 
         uint32_t BestPresentModeScore;
         IsUsable = IsUsable && (0 == VulkanPickSurfacePresentMode(PhysicalDevice, Surface, &BestPresentMode, &BestPresentModeScore));
 
+        uint32_t FeatureScore = 0;
+        if(Features.samplerAnisotropy) {
+            ++FeatureScore;
+        }
+
         uint32_t Score = 0;
         if(IsUsable) {
             // NOTE(blackedout): As long as they are usable, just pick the best once (hence the added 1)
-            Score = 1 + 3*DeviceTypeScore + BestSurfaceFormatScore + BestPresentModeScore;
-            if(Score > BestPhyiscalDeviceScore) {
-                BestPhyiscalDeviceScore = Score;
-                BestPhyiscalDevice = PhysicalDevice;
+            Score = 1 + 3*DeviceTypeScore + BestSurfaceFormatScore + BestPresentModeScore + FeatureScore;
+            if(Score > BestPhysicalDeviceScore) {
+                BestPhysicalDeviceScore = Score;
+                BestPhysicalDevice = PhysicalDevice;
 
-                BestPhyiscalDeviceGraphicsQueueIndex = UsableQueueGraphicsIndex;
-                BestPhyiscalDeviceSurfaceQueueIndex = UsableQueueSurfaceIndex;
-                BestPhyiscalDeviceHasPortabilitySubsetExtension = HasPortabilitySubsetExtension;
-                BestPhyiscalDeviceInitialSurfaceFormat = BestSurfaceFormat;
+                BestPhysicalDeviceGraphicsQueueIndex = UsableQueueGraphicsIndex;
+                BestPhysicalDeviceSurfaceQueueIndex = UsableQueueSurfaceIndex;
+                BestPhysicalDeviceHasPortabilitySubsetExtension = HasPortabilitySubsetExtension;
+                BestPhysicalDeviceInitialSurfaceFormat = BestSurfaceFormat;
+
+                BestPhysicalDeviceProperties = Props;
+                BestPhysicalDeviceFeatures = Features;
             }
         }
-        PhyiscalDeviceScores[I] = Score;
+        PhysicalDeviceScores[I] = Score;
     }
 
 #ifdef VULKAN_INFO_PRINT
-    printf("Vulkan phyiscal devices (%d):\n", PhysicalDeviceCount);
+    printf("Vulkan physical devices (%d):\n", PhysicalDeviceCount);
     for(uint32_t I = 0; I < PhysicalDeviceCount; ++I) {
         VkPhysicalDeviceProperties Props;
         vkGetPhysicalDeviceProperties(PhysicalDevices[I], &Props);
-        printf("[%d] (%d) %s (%s)\n", I, PhyiscalDeviceScores[I], Props.deviceName, string_VkPhysicalDeviceType(Props.deviceType));
+        printf("[%d] (%d) %s (%s)\n", I, PhysicalDeviceScores[I], Props.deviceName, string_VkPhysicalDeviceType(Props.deviceType));
         //printf("\t[%d] Queue (%d) %s %s\n", J, QueueFamilyProps.queueCount, IsGraphics? "VK_QUEUE_GRAPHICS_BIT" : "", IsSurfaceSupported? "SURFACE" : "");
         //printf("\tSurface image count range: %d to %d\n", SurfaceCapabilities.minImageCount, SurfaceCapabilities.maxImageCount);
         //printf("\tSurface image extents: (%d, %d) to (%d, %d)\n", SurfaceCapabilities.minImageExtent.width, SurfaceCapabilities.minImageExtent.height, SurfaceCapabilities.maxImageExtent.width, SurfaceCapabilities.maxImageExtent.height);
     }
 #endif
 
-    AssertMessageGoto(BestPhyiscalDeviceScore > 0, label_Error, "No usable physical device found.\n");
+    AssertMessageGoto(BestPhysicalDeviceScore > 0, label_Error, "No usable physical device found.\n");
 
     float DeviceQueuePriorities[] = { 1.0f };
     VkDeviceQueueCreateInfo DeviceQueueCreateInfos[2] = {
@@ -832,16 +1061,16 @@ static int VulkanCreateSurfaceDevice(VkInstance Instance, VkSurfaceKHR Surface, 
             .sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
             .pNext = 0,
             .flags = 0,
-            .queueFamilyIndex = BestPhyiscalDeviceGraphicsQueueIndex,
+            .queueFamilyIndex = BestPhysicalDeviceGraphicsQueueIndex,
             .queueCount = 1,
             .pQueuePriorities = DeviceQueuePriorities
         },
     };
 
     uint32_t DeviceQueueCreateInfoCount = 1;
-    if(BestPhyiscalDeviceGraphicsQueueIndex != BestPhyiscalDeviceSurfaceQueueIndex) {
+    if(BestPhysicalDeviceGraphicsQueueIndex != BestPhysicalDeviceSurfaceQueueIndex) {
         DeviceQueueCreateInfos[1] = DeviceQueueCreateInfos[0];
-        DeviceQueueCreateInfos[1].queueFamilyIndex = BestPhyiscalDeviceSurfaceQueueIndex;
+        DeviceQueueCreateInfos[1].queueFamilyIndex = BestPhysicalDeviceSurfaceQueueIndex;
         DeviceQueueCreateInfoCount = 2;
     }
 
@@ -851,11 +1080,14 @@ static int VulkanCreateSurfaceDevice(VkInstance Instance, VkSurfaceKHR Surface, 
     };
 
     uint32_t ExtensionNameCount = ArrayCount(ExtensionNames);
-    if(BestPhyiscalDeviceHasPortabilitySubsetExtension == 0) {
+    if(BestPhysicalDeviceHasPortabilitySubsetExtension == 0) {
         ExtensionNameCount -= 1;
     }
 
-    VkPhysicalDeviceFeatures PhyiscalDeviceFeatures = {0};
+    // NOTE(blackedout): Disable all features by default first, then enable using supported features
+    VkPhysicalDeviceFeatures PhysicalDeviceFeatures = {0};
+    PhysicalDeviceFeatures.samplerAnisotropy = BestPhysicalDeviceFeatures.samplerAnisotropy;
+
     VkDeviceCreateInfo DeviceCreateInfo = {
         .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
         .pNext = 0,
@@ -866,24 +1098,27 @@ static int VulkanCreateSurfaceDevice(VkInstance Instance, VkSurfaceKHR Surface, 
         .ppEnabledLayerNames = 0,
         .enabledExtensionCount = ExtensionNameCount,
         .ppEnabledExtensionNames = ExtensionNames,
-        .pEnabledFeatures = &PhyiscalDeviceFeatures,
+        .pEnabledFeatures = &PhysicalDeviceFeatures,
     };
 
     VkSurfaceCapabilitiesKHR BestPhysicalDeviceSurfaceCapabilities;
-    VulkanCheckGoto(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(BestPhyiscalDevice, Surface, &BestPhysicalDeviceSurfaceCapabilities), label_Error);
+    VulkanCheckGoto(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(BestPhysicalDevice, Surface, &BestPhysicalDeviceSurfaceCapabilities), label_Error);
 
     VkDevice DeviceHandle;
-    VulkanCheckGoto(vkCreateDevice(BestPhyiscalDevice, &DeviceCreateInfo, 0, &DeviceHandle), label_Error);
+    VulkanCheckGoto(vkCreateDevice(BestPhysicalDevice, &DeviceCreateInfo, 0, &DeviceHandle), label_Error);
 
     vulkan_surface_device LocalSurfaceDevice = {
         .Handle = DeviceHandle,
-        .PhysicalDevice = BestPhyiscalDevice,
+        .PhysicalDevice = BestPhysicalDevice,
         .Surface = Surface,
-        .GraphicsQueueFamilyIndex = BestPhyiscalDeviceGraphicsQueueIndex,
-        .PresentQueueFamilyIndex = BestPhyiscalDeviceSurfaceQueueIndex,
+        .GraphicsQueueFamilyIndex = BestPhysicalDeviceGraphicsQueueIndex,
+        .PresentQueueFamilyIndex = BestPhysicalDeviceSurfaceQueueIndex,
 
         .InitialExtent = BestPhysicalDeviceSurfaceCapabilities.currentExtent,
-        .InitialSurfaceFormat = BestPhyiscalDeviceInitialSurfaceFormat
+        .InitialSurfaceFormat = BestPhysicalDeviceInitialSurfaceFormat,
+
+        .Features = BestPhysicalDeviceFeatures,
+        .Properties = BestPhysicalDeviceProperties
     };
 
     *Device = LocalSurfaceDevice;
@@ -987,19 +1222,6 @@ static int VulkanCreateSwapchain(vulkan_surface_device Device, VkExtent2D Extent
 
     uint32_t CreatedImageViewCount;
     for(CreatedImageViewCount = 0; CreatedImageViewCount < SwapchainImageCount; ++CreatedImageViewCount) {
-        VkComponentMapping ImageViewComponentMapping = {
-            .r = VK_COMPONENT_SWIZZLE_IDENTITY,
-            .g = VK_COMPONENT_SWIZZLE_IDENTITY,
-            .b = VK_COMPONENT_SWIZZLE_IDENTITY,
-            .a = VK_COMPONENT_SWIZZLE_IDENTITY
-        };
-        VkImageSubresourceRange ImageViewSubresourceRange = {
-            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-            .baseMipLevel = 0,
-            .levelCount = 1,
-            .baseArrayLayer = 0,
-            .layerCount = 1
-        };
         VkImageViewCreateInfo ImageViewCreateInfo = {
             .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
             .pNext = 0,
@@ -1007,8 +1229,14 @@ static int VulkanCreateSwapchain(vulkan_surface_device Device, VkExtent2D Extent
             .image = Images[CreatedImageViewCount],
             .viewType = VK_IMAGE_VIEW_TYPE_2D,
             .format = SurfaceFormat.format,
-            .components = ImageViewComponentMapping,
-            .subresourceRange = ImageViewSubresourceRange
+            .components = { .r = VK_COMPONENT_SWIZZLE_IDENTITY, .g = VK_COMPONENT_SWIZZLE_IDENTITY, .b = VK_COMPONENT_SWIZZLE_IDENTITY, .a = VK_COMPONENT_SWIZZLE_IDENTITY },
+            .subresourceRange = {
+                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                .baseMipLevel = 0,
+                .levelCount = 1,
+                .baseArrayLayer = 0,
+                .layerCount = 1
+            }
         };
 
         VulkanCheckGoto(vkCreateImageView(Device.Handle, &ImageViewCreateInfo, 0, ImageViews + CreatedImageViewCount), label_ImageViews);
@@ -1073,7 +1301,7 @@ static void VulkanDestroyDefaultGraphicsPipeline(vulkan_surface_device Device, v
 }
 
 // MARK: Graphics Pipeline
-static int VulkanCreateDefaultGraphicsPipeline(vulkan_surface_device Device, VkShaderModule ModuleVS, VkShaderModule ModuleFS, VkExtent2D InitialExtent, VkFormat SwapchainFormat, VkPipelineVertexInputStateCreateInfo PipelineVertexInputStateCreateInfo, VkDescriptorSetLayout DescriptorSetLayout, vulkan_graphics_pipeline_info *PipelineInfo) {
+static int VulkanCreateDefaultGraphicsPipeline(vulkan_surface_device Device, VkShaderModule ModuleVS, VkShaderModule ModuleFS, VkExtent2D InitialExtent, VkFormat SwapchainFormat, VkPipelineVertexInputStateCreateInfo PipelineVertexInputStateCreateInfo, VkDescriptorSetLayout *DescriptorSetLayouts, uint32_t DescriptorSetLayoutCount, vulkan_graphics_pipeline_info *PipelineInfo) {
     VkPipelineShaderStageCreateInfo PipelineStageCreateInfos[] = {
         {
             .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
@@ -1107,8 +1335,6 @@ static int VulkanCreateDefaultGraphicsPipeline(vulkan_surface_device Device, VkS
         .dynamicStateCount = ArrayCount(VulkanDynamicStates),
         .pDynamicStates = VulkanDynamicStates
     };
-
-    
 
     VkPipelineInputAssemblyStateCreateInfo PipelineInputAssemblyStateCreateInfo = {
          .sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
@@ -1197,12 +1423,12 @@ static int VulkanCreateDefaultGraphicsPipeline(vulkan_surface_device Device, VkS
         .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
         .pNext = 0,
         .flags = 0,
-        .setLayoutCount = 1,
-        .pSetLayouts = &DescriptorSetLayout,
+        .setLayoutCount = DescriptorSetLayoutCount,
+        .pSetLayouts = DescriptorSetLayouts,
         .pushConstantRangeCount = 0,
         .pPushConstantRanges = 0,
     };
-    VulkanCheckGoto(vkCreatePipelineLayout(Device.Handle, &PipelineLayoutCreateInfo, 0, &LocalPipelineLayout), label_DescriptorSetLayout);
+    VulkanCheckGoto(vkCreatePipelineLayout(Device.Handle, &PipelineLayoutCreateInfo, 0, &LocalPipelineLayout), label_Error);
 
     VkAttachmentDescription AttachmentDescriptions[] = {
         {
@@ -1298,8 +1524,6 @@ label_RenderPass:
     vkDestroyRenderPass(Device.Handle, LocalRenderPass, 0);
 label_PipelineLayout:
     vkDestroyPipelineLayout(Device.Handle, LocalPipelineLayout, 0);
-label_DescriptorSetLayout:
-    vkDestroyDescriptorSetLayout(Device.Handle, DescriptorSetLayout, 0);
 label_Error:
     return 1;
 }
