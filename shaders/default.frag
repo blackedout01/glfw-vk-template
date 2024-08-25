@@ -10,5 +10,5 @@ layout(set=1, binding=2) uniform texture2D Tex;
 
 void main() {
     vec4 TexColor = texture(sampler2D(Tex, Sampler), FragTexCoord);
-    Result = vec4(TexColor.rgb, 1.0);
+    Result = vec4(FragColor*TexColor.rgb, 1.0);
 }

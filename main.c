@@ -17,12 +17,51 @@ typedef struct {
 } vertex;
 
 static vertex Vertices[] = {
-    { .Position = { -0.5f, 0.5f, 0.0f }, .Color = { 1.0f, 1.0f, 1.0f }, .TexCoord = { 0.0f, 1.0f } },
-    { .Position = { -0.5f, -0.5f, 0.0f }, .Color = { 1.0f, 0.0f, 0.0f }, .TexCoord = { 0.0f, 0.0f } },
-    { .Position = { 0.5f, -0.5f, 0.0f }, .Color = { 0.0f, 1.0f, 0.0f }, .TexCoord = { 1.0f, 0.0f } },
-    { .Position = { 0.5f, 0.5f, 0.0f }, .Color = { 0.0f, 0.0f, 1.0f }, .TexCoord = { 1.0f, 1.0f } },
+    { .Position = { -8.0f, 0.0f, -8.0f }, .Color = { 1.0f, 1.0f, 1.0f }, .TexCoord = { 0.0f, 8.0f } },
+    { .Position = { 8.0f, 0.0f, -8.0f }, .Color = { 1.0f, 1.0f, 1.0f }, .TexCoord = { 0.0f, 0.0f } },
+    { .Position = { 8.0f, 0.0f, 8.0f }, .Color = { 1.0f, 1.0f, 1.0f }, .TexCoord = { 8.0f, 0.0f } },
+    { .Position = { -8.0f, 0.0f, 8.0f }, .Color = { 1.0f, 1.0f, 1.0f }, .TexCoord = { 8.0f, 8.0f } },
+
+#define CUBE(X, Y, Z, R, G, B, H) \
+    { .Position = { (X) + 0.0f, (Y) + 0.0f*(H), (Z) + 0.0f }, .Color = { R, G, B }, .TexCoord = { 0.0f, 0.0f } },\
+    { .Position = { (X) + 1.0f, (Y) + 0.0f*(H), (Z) + 0.0f }, .Color = { R, G, B }, .TexCoord = { 0.0f, 0.0f } },\
+    { .Position = { (X) + 1.0f, (Y) + 0.0f*(H), (Z) + 1.0f }, .Color = { R, G, B }, .TexCoord = { 0.0f, 0.0f } },\
+    { .Position = { (X) + 0.0f, (Y) + 0.0f*(H), (Z) + 1.0f }, .Color = { R, G, B }, .TexCoord = { 0.0f, 0.0f } },\
+    { .Position = { (X) + 0.0f, (Y) + 1.0f*(H), (Z) + 0.0f }, .Color = { R, G, B }, .TexCoord = { 0.0f, 0.0f } },\
+    { .Position = { (X) + 1.0f, (Y) + 1.0f*(H), (Z) + 0.0f }, .Color = { R, G, B }, .TexCoord = { 0.0f, 0.0f } },\
+    { .Position = { (X) + 1.0f, (Y) + 1.0f*(H), (Z) + 1.0f }, .Color = { R, G, B }, .TexCoord = { 0.0f, 0.0f } },\
+    { .Position = { (X) + 0.0f, (Y) + 1.0f*(H), (Z) + 1.0f }, .Color = { R, G, B }, .TexCoord = { 0.0f, 0.0f } }
+
+    CUBE(-3.0f, 0.0f, -3.0f, 1.0f, 0.1f, 0.1f, 1.0f),
+    CUBE(-1.0f, 0.0f, -1.0f, 0.1f, 1.0f, 0.1f, 2.0f),
+    CUBE(2.0f, 0.0f, 2.0f, 0.1f, 0.1f, 1.0f, 3.0f)
+
+#undef CUBE
 };
-static uint32_t Indices[] = { 0, 3, 2, 2, 1, 0 };
+static uint32_t Indices[] = {
+    0, 1, 2, 2, 3, 0,
+     
+    // NOTE(blackedout): Cube vertex indices
+    //   7--------6
+    //  /|       /|
+    // 4--------5 |
+    // | 3------|-2
+    // |/       |/
+    // 0--------1
+#define CUBE(B)\
+    /* (B) + 0, (B) + 3, (B) + 2, (B) + 2, (B) + 1, (B) + 0,*/ \
+    (B) + 4, (B) + 5, (B) + 6, (B) + 6, (B) + 7, (B) + 4,\
+    (B) + 0, (B) + 1, (B) + 5, (B) + 5, (B) + 4, (B) + 0,\
+    (B) + 3, (B) + 7, (B) + 6, (B) + 6, (B) + 2, (B) + 3,\
+    (B) + 3, (B) + 0, (B) + 4, (B) + 4, (B) + 7, (B) + 3,\
+    (B) + 1, (B) + 2, (B) + 6, (B) + 6, (B) + 5, (B) + 1
+
+    CUBE(4),
+    CUBE(12),
+    CUBE(20)
+
+#undef CUBE
+};
 
 typedef struct {
     m4 M, V, P;
@@ -32,17 +71,18 @@ typedef struct {
     int FramebufferWidth;
     int FramebufferHeight;
 
+    int IsSuperDown;
+
     int IsDragging;
     double LastCursorX, LastCursorY;
     v2 DragDelta;
 
     float CamAzi, CamPol;
-
-    v2 FocusOffset;
+    float CamZoom;
 } context;
 
 static void ErrorCallbackGLFW(int Code, const char *Description) {
-    printf("GLFW error %d: %s\n", Code, Description);
+    printfc(CODE_RED, "GLFW error %d: %s\n", Code, Description);
 }
 
 static void CursorPositionCallbackGLFW(GLFWwindow *Window, double PosX, double PosY) {
@@ -73,11 +113,34 @@ static void MouseButtonCallbackGLFW(GLFWwindow *Window, int Button, int Action, 
     *Context_ = Context;
 }
 
+static void KeyCallbackGLFW(GLFWwindow *Window, int Key, int Scancode, int Action, int Mods) {
+    context *Context_ = (context *)glfwGetWindowUserPointer(Window);
+    context Context = *Context_;
+
+    if(Key == GLFW_KEY_LEFT_SUPER) {
+        Context.IsSuperDown = Action != GLFW_RELEASE;
+    }
+
+    *Context_ = Context;
+}
+
 static void ScrollCallbackGLFW(GLFWwindow *Window, double OffsetX, double OffsetY) {
-    context *Context = (context *)glfwGetWindowUserPointer(Window);
-    double Scale = 0.01;
-    Context->FocusOffset.E[0] += (float)(Scale*OffsetX);
-    Context->FocusOffset.E[1] += (float)(Scale*OffsetY);
+    context *Context_ = (context *)glfwGetWindowUserPointer(Window);
+    context Context = *Context_;
+
+    float NewZoom = Max(0.01f, Min(100.0f, Context.CamZoom*(float)pow(1.1, OffsetY)));
+#ifdef __APPLE__
+    if(Context.IsSuperDown) {
+        Context.CamZoom = NewZoom;
+    } else {
+        Context.CamAzi -= 0.1f*OffsetX;
+        Context.CamPol -= 0.1f*OffsetY;
+    }
+#else
+    Context.CamZoom = NewZoom;
+#endif
+
+    *Context_ = Context;
 }
 
 static void FramebufferSizeCallbackGLFW(GLFWwindow *Window, int Width, int Height) {
@@ -307,9 +370,12 @@ int main() {
     GLFWwindow *Window = glfwCreateWindow(1280, 720, "glfw-vulkan-template", 0, 0);
     CheckGoto(Window == 0, label_DestroyVulkanInstance);
     context Context = {0};
+    Context.CamPol = -0.01f;
+    Context.CamZoom = 1.0f;
     glfwSetWindowUserPointer(Window, &Context);
     glfwSetCursorPosCallback(Window, CursorPositionCallbackGLFW);
     glfwSetMouseButtonCallback(Window, MouseButtonCallbackGLFW);
+    glfwSetKeyCallback(Window, KeyCallbackGLFW);
     glfwSetScrollCallback(Window, ScrollCallbackGLFW);
     glfwSetFramebufferSizeCallback(Window, FramebufferSizeCallbackGLFW);
 
@@ -359,8 +425,8 @@ int main() {
 
     uint8_t TileImageBytes[] = {
         0xff, 0xff, 0xff, 0xff,
-        0xe0, 0xe0, 0xe0, 0xff,
-        0xe0, 0xe0, 0xe0, 0xff,
+        0xf9, 0xf9, 0xfd, 0xff,
+        0xf9, 0xf9, 0xfd, 0xff,
         0xff, 0xff, 0xff, 0xff,
     };
     vulkan_image Images[] = {
@@ -393,12 +459,13 @@ int main() {
         .pVertexAttributeDescriptions = VertexAttributeDescriptions,
     };
 
+    VkSampleCountFlagBits SampleCount = Min(VulkanSurfaceDevice.MaxSampleCount, VK_SAMPLE_COUNT_4_BIT);
     vulkan_graphics_pipeline_info VulkanGraphicsPipelineInfo;
-    CheckGoto(VulkanCreateDefaultGraphicsPipeline(VulkanSurfaceDevice, VulkanShaders.Default.Vert, VulkanShaders.Default.Frag, VulkanSurfaceDevice.InitialExtent, VulkanSurfaceDevice.InitialSurfaceFormat.format, PipelineVertexInputStateCreateInfo, VulkanShaders.DescriptorSetLayouts, ArrayCount(VulkanShaders.DescriptorSetLayouts), &VulkanGraphicsPipelineInfo), label_DestroyShaders);
+    CheckGoto(VulkanCreateDefaultGraphicsPipeline(VulkanSurfaceDevice, VulkanShaders.Default.Vert, VulkanShaders.Default.Frag, VulkanSurfaceDevice.InitialExtent, VulkanSurfaceDevice.InitialSurfaceFormat.format, SampleCount, PipelineVertexInputStateCreateInfo, VulkanShaders.DescriptorSetLayouts, ArrayCount(VulkanShaders.DescriptorSetLayouts), &VulkanGraphicsPipelineInfo), label_DestroyShaders);
 
     vulkan_swapchain_handler VulkanSwapchainHandler;
     VkExtent2D InitialExtent = { .width = (uint32_t)Width, .height = (uint32_t)Height };
-    CheckGoto(VulkanCreateSwapchainAndHandler(VulkanSurfaceDevice, InitialExtent, VulkanGraphicsPipelineInfo.RenderPass, &VulkanSwapchainHandler), label_DestroyGraphicsPipeline);
+    CheckGoto(VulkanCreateSwapchainAndHandler(VulkanSurfaceDevice, InitialExtent, SampleCount, VulkanGraphicsPipelineInfo.RenderPass, &VulkanSwapchainHandler), label_DestroyGraphicsPipeline);
 
     VkExtent2D FramebufferExtent;
     int A = 0;
@@ -411,7 +478,7 @@ int main() {
 
         v3 AxisX = {1.0f, 0.0f, 0.0f};
         v3 AxisY = {0.0f, 1.0f, 0.0f};
-        m4 ViewRotation = MultiplyM4M4(TranslationM4(0.0f, 0.0f, -5.0f), MultiplyM4M4(RotationM4(AxisX, -Context.CamPol), RotationM4(AxisY, -Context.CamAzi)));
+        m4 ViewRotation = MultiplyM4M4(TranslationM4(0.0f, 0.0f, -8.0f/Context.CamZoom), MultiplyM4M4(RotationM4(AxisX, -Context.CamPol), RotationM4(AxisY, -Context.CamAzi)));
 
         VkExtent2D FramebufferExtent = {
             .width = Context.FramebufferWidth,
@@ -430,9 +497,13 @@ int main() {
             .offset = { 0, 0 },
             .extent = AcquiredImageExtent
         };
-        VkClearValue RenderClearValue = {
-            //.color = { .float32 = { (A & 1), 0.5f*(A & 2), 0.0f, 1.0f } }
-            .color = { .float32 = { 0.0f, 0.0f, 0.0f, 1.0f } }
+        VkClearValue RenderClearValues[] = {
+            {
+                //.color = { .float32 = { (A & 1), 0.5f*(A & 2), 0.0f, 1.0f } }
+                .color = { .float32 = { 0.6f, 0.8f, 0.99f, 1.0f } }
+                //.color = { .float32 = { 0.0f, 0.0f, 0.0f, 1.0f } }
+            },
+            { .depthStencil = { .depth = 1.0f, .stencil = 0 } }
         };
 
         VkCommandBufferBeginInfo GraphicsCommandBufferBeginInfo = {
@@ -450,8 +521,8 @@ int main() {
             .renderPass = VulkanGraphicsPipelineInfo.RenderPass,
             .framebuffer = AcquiredFramebuffer,
             .renderArea = RenderArea,
-            .clearValueCount = 1,
-            .pClearValues = &RenderClearValue // NOTE(blackedout): For VK_ATTACHMENT_LOAD_OP_CLEAR
+            .clearValueCount = ArrayCount(RenderClearValues),
+            .pClearValues = RenderClearValues // NOTE(blackedout): For VK_ATTACHMENT_LOAD_OP_CLEAR
         };
 
         VkViewport Viewport = {
@@ -471,9 +542,7 @@ int main() {
         ubo_mats *UboMats = VulkanShaders.UniformMats[AcquiredImageBufIndex];
         UboMats->M = TransposeM4(IdentityM4());
         UboMats->V = TransposeM4(ViewRotation);
-        UboMats->P = TransposeM4(ProjectionPersp(1.1f, Viewport.width/Viewport.height, 0.01f, 100.0f));
-        Context.FocusOffset.E[0] = 0.0f;
-        Context.FocusOffset.E[1] = 0.0f;
+        UboMats->P = TransposeM4(ProjectionPersp(1.1f, Viewport.width/Viewport.height, 0.01f, 1000.0f));
 
         vkCmdBeginRenderPass(GraphicsCommandBuffer, &RenderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
         vkCmdBindPipeline(GraphicsCommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, VulkanGraphicsPipelineInfo.Pipeline);
