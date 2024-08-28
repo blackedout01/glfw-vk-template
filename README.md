@@ -1,3 +1,6 @@
+## License
+I haven't decided on a license for the C and shader code yet, but the build scripts are now public domain.
+
 ## Download
 `git clone --recursive https://github.com/blackedout01/glfw-vk-template.git`
 <br/>or if already cloned without `--recursive`:

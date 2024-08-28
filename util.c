@@ -1,6 +1,6 @@
 #include <stdint.h>
 
-#define StaticAssert(Condition) struct sas_ ## __LINE__ { int A[((Condition) == 0)]; } 
+#define StaticAssert(Condition) struct sas_ ## __LINE__ { int A[-((Condition) == 0)]; } 
 
 #define ArrayCount(X) ((sizeof(X)/sizeof(*X)))
 #define MemberArrayCount(TypeName, MemberName) ArrayCount(((TypeName *)0)->MemberName)
@@ -39,6 +39,18 @@ typedef struct {
 typedef struct {
     float E[3];
 } v3;
+
+typedef struct {
+    float E[4];
+} v4;
+
+typedef struct {
+    float E[4];
+} m2;
+
+typedef struct {
+    float E[9];
+} m3;
 
 typedef struct {
     float E[16];

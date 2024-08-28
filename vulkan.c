@@ -3,7 +3,7 @@
 
 #define VULKAN_NULL_HANDLE 0 // NOTE(blackedout): Somehow VK_NULL_HANDLE generates erros when compiling in cpp mode
 #define VULKAN_INFO_PRINT
-#define MAX_ACQUIRED_IMAGE_COUNT 1
+#define MAX_ACQUIRED_IMAGE_COUNT 2
 #define MAX_SWAPCHAIN_COUNT (MAX_ACQUIRED_IMAGE_COUNT + 1)
 
 typedef struct {
@@ -58,14 +58,20 @@ typedef struct {
     buffer_indices SwapchainBufIndices;
     vulkan_swapchain Swapchains[MAX_SWAPCHAIN_COUNT];
 
-    buffer_indices AcquiredImageBufIndices;
-    uint32_t AcquiredImageIndices[MAX_ACQUIRED_IMAGE_COUNT];
-    uint32_t AcquiredImageSwapchainIndices[MAX_ACQUIRED_IMAGE_COUNT];
+    buffer_indices AcquiredImageDataIndices;
+    uint32_t AcquiredSwapchainImageIndices[MAX_ACQUIRED_IMAGE_COUNT];
+    uint32_t AcquiredSwapchainIndices[MAX_ACQUIRED_IMAGE_COUNT];
 
     VkSemaphore ImageAvailableSemaphores[MAX_ACQUIRED_IMAGE_COUNT];
     VkSemaphore RenderFinishedSemaphores[MAX_ACQUIRED_IMAGE_COUNT];
     VkFence InFlightFences[MAX_ACQUIRED_IMAGE_COUNT];
 } vulkan_swapchain_handler;
+
+typedef struct {
+    VkFramebuffer Framebuffer;
+    VkExtent2D Extent;
+    uint32_t DataIndex;
+} vulkan_acquired_image;
 
 typedef struct {
     VkPipelineLayout Layout;
@@ -878,35 +884,35 @@ static int VulkanCreateShaderUniformBuffers(vulkan_surface_device Device, VkDesc
             .pSetLayouts = DescriptorSetLayouts
         };
 
-        VkDescriptorSet DescriptorSets[ArrayCount(DescriptorSetLayouts)];
-        VulkanCheckGoto(vkAllocateDescriptorSets(Device.Handle, &DescriptorSetAllocateInfo, DescriptorSets), label_DescriptorPool);
+        // NOTE(blackedout): The length of Description.DescriptorSets must be ArrayCount(DescriptorSetLayouts)
+        VulkanCheckGoto(vkAllocateDescriptorSets(Device.Handle, &DescriptorSetAllocateInfo, Description.DescriptorSets), label_DescriptorPool);
 
-        VkDescriptorBufferInfo BufferInfo = {
-            .buffer = VULKAN_NULL_HANDLE,
-            .offset = 0,
-            .range = Description.Size
-        };
-        for(uint32_t J = 0; J < ArrayCount(DescriptorSets); ++J) {
-            BufferInfo.buffer = Description.Buffers[J];
-
-            VkWriteDescriptorSet WriteDescriptorSets[] = {
-                {
-                    .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                    .pNext = 0,
-                    .dstSet = DescriptorSets[I],
-                    .dstBinding = Description.BindingIndex, // NOTE(blackedout): Uniform binding index (?)
-                    .dstArrayElement = 0,
-                    .descriptorCount = 1,
-                    .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-                    .pImageInfo = 0,
-                    .pBufferInfo = &BufferInfo,
-                    .pTexelBufferView = 0
-                },
+        VkDescriptorBufferInfo BufferInfos[ArrayCount(DescriptorSetLayouts)];
+        VkWriteDescriptorSet WriteDescriptorSets[ArrayCount(DescriptorSetLayouts)];
+        for(uint32_t J = 0; J < ArrayCount(DescriptorSetLayouts); ++J) {
+            VkDescriptorBufferInfo BufferInfo = {
+                .buffer = Description.Buffers[J],
+                .offset = 0,
+                .range = Description.Size
             };
 
-            vkUpdateDescriptorSets(Device.Handle, ArrayCount(WriteDescriptorSets), WriteDescriptorSets, 0, 0);
+            VkWriteDescriptorSet WriteDescriptorSet = {
+                .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                .pNext = 0,
+                .dstSet = Description.DescriptorSets[J],
+                .dstBinding = Description.BindingIndex, // NOTE(blackedout): Uniform binding index (?)
+                .dstArrayElement = 0,
+                .descriptorCount = 1,
+                .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+                .pImageInfo = 0,
+                .pBufferInfo = BufferInfos + J,
+                .pTexelBufferView = 0
+            };
+
+            BufferInfos[J] = BufferInfo;
+            WriteDescriptorSets[J] = WriteDescriptorSet;
         }
-        memcpy(Description.DescriptorSets, DescriptorSets, sizeof(DescriptorSets));
+        vkUpdateDescriptorSets(Device.Handle, ArrayCount(WriteDescriptorSets), WriteDescriptorSets, 0, 0);
     }
 
     *BufferMemory = Memory;
@@ -1448,7 +1454,7 @@ static void VulkanDestroyDefaultGraphicsPipeline(vulkan_surface_device Device, v
 }
 
 // MARK: Graphics Pipeline
-static int VulkanCreateDefaultGraphicsPipeline(vulkan_surface_device Device, VkShaderModule ModuleVS, VkShaderModule ModuleFS, VkExtent2D InitialExtent, VkFormat SwapchainFormat, VkSampleCountFlagBits SampleCount, VkPipelineVertexInputStateCreateInfo PipelineVertexInputStateCreateInfo, VkDescriptorSetLayout *DescriptorSetLayouts, uint32_t DescriptorSetLayoutCount, vulkan_graphics_pipeline_info *PipelineInfo) {
+static int VulkanCreateDefaultGraphicsPipeline(vulkan_surface_device Device, VkShaderModule ModuleVS, VkShaderModule ModuleFS, VkExtent2D InitialExtent, VkFormat SwapchainFormat, VkSampleCountFlagBits SampleCount, VkPipelineVertexInputStateCreateInfo PipelineVertexInputStateCreateInfo, VkDescriptorSetLayout *DescriptorSetLayouts, uint32_t DescriptorSetLayoutCount, VkPushConstantRange PushConstantRange, vulkan_graphics_pipeline_info *PipelineInfo) {
     VkPipelineShaderStageCreateInfo PipelineStageCreateInfos[] = {
         {
             .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
@@ -1587,8 +1593,8 @@ static int VulkanCreateDefaultGraphicsPipeline(vulkan_surface_device Device, VkS
         .flags = 0,
         .setLayoutCount = DescriptorSetLayoutCount,
         .pSetLayouts = DescriptorSetLayouts,
-        .pushConstantRangeCount = 0,
-        .pPushConstantRanges = 0,
+        .pushConstantRangeCount = 1,
+        .pPushConstantRanges = &PushConstantRange,
     };
     VulkanCheckGoto(vkCreatePipelineLayout(Device.Handle, &PipelineLayoutCreateInfo, 0, &LocalPipelineLayout), label_Error);
 
@@ -1754,13 +1760,13 @@ static int VulkanCreateSwapchainAndHandler(vulkan_surface_device Device, VkExten
         },
         .Swapchains = { Swapchain },
 
-        .AcquiredImageBufIndices = {
+        .AcquiredImageDataIndices = {
             .Cap = MAX_ACQUIRED_IMAGE_COUNT,
             .Count = 0,
             .Next = 0
         },
-        .AcquiredImageIndices = {0},
-        .AcquiredImageSwapchainIndices = {0},
+        .AcquiredSwapchainImageIndices = {0},
+        .AcquiredSwapchainIndices = {0},
     };
 
     VkSemaphoreCreateInfo UnsignaledSemaphoreCreateInfo = {
@@ -1808,31 +1814,31 @@ label_Error:
     return 1;
 }
 
-static int VulkanAcquireNextImage(vulkan_surface_device Device, vulkan_swapchain_handler *SwapchainHandler, VkExtent2D FramebufferExtent, VkExtent2D *ImageExtent, VkFramebuffer *Framebuffer, uint32_t *UserImageIndex) {
+static int VulkanAcquireNextImage(vulkan_surface_device Device, vulkan_swapchain_handler *SwapchainHandler, VkExtent2D FramebufferExtent, vulkan_acquired_image *AcquiredImage) {
     vulkan_swapchain_handler Handler = *SwapchainHandler;
 
-    // TODO(blackedout): Think of better names for ImageIndex and AcquiredImageBufIndex
-    // ImageIndex is the index of the acquired image in the array of swapchain images (max is runtime dependent)
-    // AcquiredImageBufIndex is the index into the array of all acquired images (max is the max number of acquired images)
-    uint32_t ImageIndex;
-    uint32_t AcquiredImageBufIndex;
+    // NOTE(blackedout):
+    // SwapchainImageIndex is the index of the acquired image in the array of swapchain images (max is runtime dependent)
+    // AcquiredImageDataIndex is the index into the array of all acquired images (max is the max number of acquired images)
+    uint32_t SwapchainImageIndex;
+    uint32_t AcquiredImageDataIndex;
     uint32_t SwapchainIndex;
     vulkan_swapchain Swapchain;
     for(;;) {
         SwapchainIndex = IndicesCircularHead(&Handler.SwapchainBufIndices);
         Swapchain = Handler.Swapchains[SwapchainIndex];
-        VkSemaphore ImageAvailableSemaphore = Handler.ImageAvailableSemaphores[Handler.AcquiredImageBufIndices.Next];
-        VkResult AcquireResult = vkAcquireNextImageKHR(Device.Handle, Swapchain.Handle, UINT64_MAX, ImageAvailableSemaphore, VULKAN_NULL_HANDLE, &ImageIndex);
+        VkSemaphore ImageAvailableSemaphore = Handler.ImageAvailableSemaphores[Handler.AcquiredImageDataIndices.Next];
+        VkResult AcquireResult = vkAcquireNextImageKHR(Device.Handle, Swapchain.Handle, UINT64_MAX, ImageAvailableSemaphore, VULKAN_NULL_HANDLE, &SwapchainImageIndex);
         if(AcquireResult == VK_ERROR_OUT_OF_DATE_KHR) {
             VkFence InFlightFences[ArrayCount(Handler.InFlightFences)];
-            for(uint32_t I = 0; I < Handler.AcquiredImageBufIndices.Count; ++I) {
-                uint32_t CircularIndex = IndicesCircularGet(&Handler.AcquiredImageBufIndices, I);
+            for(uint32_t I = 0; I < Handler.AcquiredImageDataIndices.Count; ++I) {
+                uint32_t CircularIndex = IndicesCircularGet(&Handler.AcquiredImageDataIndices, I);
                 InFlightFences[I] = Handler.InFlightFences[CircularIndex];
             }
 
-            vkWaitForFences(Device.Handle, Handler.AcquiredImageBufIndices.Count, InFlightFences, VK_TRUE, UINT64_MAX);
-            Handler.AcquiredImageBufIndices.Next = 0;
-            Handler.AcquiredImageBufIndices.Count = 0;
+            vkWaitForFences(Device.Handle, Handler.AcquiredImageDataIndices.Count, InFlightFences, VK_TRUE, UINT64_MAX);
+            Handler.AcquiredImageDataIndices.Next = 0;
+            Handler.AcquiredImageDataIndices.Count = 0;
 
             CheckGoto(VulkanCreateSwapchain(Device, FramebufferExtent, Handler.SampleCount, Handler.RenderPass, &Swapchain, &Swapchain), label_Error);
             for(uint32_t I = 0; I < Handler.SwapchainBufIndices.Count; ++I) {
@@ -1849,23 +1855,25 @@ static int VulkanAcquireNextImage(vulkan_surface_device Device, vulkan_swapchain
             } else VulkanCheckGoto(AcquireResult, label_Error);
 
             // NOTE(blackedout): Image acquisition worked, so push
-            AcquiredImageBufIndex = IndicesCircularPush(&Handler.AcquiredImageBufIndices);
-            Handler.AcquiredImageIndices[AcquiredImageBufIndex] = ImageIndex;
-            Handler.AcquiredImageSwapchainIndices[AcquiredImageBufIndex] = SwapchainIndex;
+            AcquiredImageDataIndex = IndicesCircularPush(&Handler.AcquiredImageDataIndices);
+            Handler.AcquiredSwapchainImageIndices[AcquiredImageDataIndex] = SwapchainImageIndex;
+            Handler.AcquiredSwapchainIndices[AcquiredImageDataIndex] = SwapchainIndex;
             ++Handler.Swapchains[SwapchainIndex].AcquiredImageCount;
 
             Handler.SwapchainIndexLastAcquired = SwapchainIndex;
-            //printf("acquired image %d (framebuffer %p) from swapchain %d (buf index %d)\n", ImageIndex, Swapchain.Framebuffers[ImageIndex], SwapchainIndex, AcquiredImageBufIndex);
+            //printf("acquired image %d (framebuffer %p) from swapchain %d (buf index %d)\n", SwapchainImageIndex, Swapchain.Framebuffers[SwapchainImageIndex], SwapchainIndex, AcquiredImageDataIndex);
 
             break;
         }
     }
 
-    *ImageExtent = Swapchain.ImageExtent;
-    *Framebuffer = Swapchain.Framebuffers[ImageIndex];
-    *UserImageIndex = AcquiredImageBufIndex;
+    vulkan_acquired_image LocalAcquiredImage = {
+        .Framebuffer = Swapchain.Framebuffers[SwapchainImageIndex],
+        .Extent = Swapchain.ImageExtent,
+        .DataIndex = AcquiredImageDataIndex
+    };
+    *AcquiredImage = LocalAcquiredImage;
     *SwapchainHandler = Handler;
-    
 
     return 0;
 
@@ -1877,30 +1885,30 @@ static int VulkanSubmitFinalAndPresent(vulkan_surface_device Device, vulkan_swap
     vulkan_swapchain_handler Handler = *SwapchainHandler;
 
     uint32_t SwapchainIndex = Handler.SwapchainIndexLastAcquired;
-    uint32_t AcquiredImagesIndex = IndicesCircularHead(&Handler.AcquiredImageBufIndices);
+    uint32_t AcquiredImageDataIndex = IndicesCircularHead(&Handler.AcquiredImageDataIndices);
 
     VkPipelineStageFlags WaitDstStageMasks[] = { VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT };
     VkSubmitInfo GraphicsSubmitInfo = {
         .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
         .pNext = 0,
         .waitSemaphoreCount = 1,
-        .pWaitSemaphores = &Handler.ImageAvailableSemaphores[AcquiredImagesIndex],
+        .pWaitSemaphores = &Handler.ImageAvailableSemaphores[AcquiredImageDataIndex],
         .pWaitDstStageMask = WaitDstStageMasks,
         .commandBufferCount = 1,
         .pCommandBuffers = &GraphicsCommandBuffer,
         .signalSemaphoreCount = 1,
-        .pSignalSemaphores = &Handler.RenderFinishedSemaphores[AcquiredImagesIndex]
+        .pSignalSemaphores = &Handler.RenderFinishedSemaphores[AcquiredImageDataIndex]
     };
-    VulkanCheckGoto(vkQueueSubmit(GraphicsQueue, 1, &GraphicsSubmitInfo, Handler.InFlightFences[AcquiredImagesIndex]), label_Error);
+    VulkanCheckGoto(vkQueueSubmit(GraphicsQueue, 1, &GraphicsSubmitInfo, Handler.InFlightFences[AcquiredImageDataIndex]), label_Error);
 
     VkPresentInfoKHR PresentInfo = {
         .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
         .pNext = 0,
         .waitSemaphoreCount = 1,
-        .pWaitSemaphores = &Handler.RenderFinishedSemaphores[AcquiredImagesIndex],
+        .pWaitSemaphores = &Handler.RenderFinishedSemaphores[AcquiredImageDataIndex],
         .swapchainCount = 1,
         .pSwapchains = &Handler.Swapchains[SwapchainIndex].Handle,
-        .pImageIndices = &Handler.AcquiredImageIndices[AcquiredImagesIndex],
+        .pImageIndices = &Handler.AcquiredSwapchainImageIndices[AcquiredImageDataIndex],
         .pResults = 0 // NOTE(blackedout): Only needed if multiple swapchains used
     };
 
@@ -1922,11 +1930,11 @@ static int VulkanSubmitFinalAndPresent(vulkan_surface_device Device, vulkan_swap
     } else VulkanCheckGoto(PresentResult, label_Error);
 
     // NOTE(blackedout): Remove acquired image from list
-    uint32_t AcquiredImagesBaseIndex = IndicesCircularTake(&Handler.AcquiredImageBufIndices);
-    VulkanCheckGoto(vkWaitForFences(Device.Handle, 1, &Handler.InFlightFences[AcquiredImagesBaseIndex], VK_TRUE, UINT64_MAX), label_Error);
-    vkResetFences(Device.Handle, 1, &Handler.InFlightFences[AcquiredImagesBaseIndex]);
-    Handler.AcquiredImageIndices[AcquiredImagesBaseIndex] = 0;
-    Handler.AcquiredImageSwapchainIndices[AcquiredImagesBaseIndex] = 0;
+    uint32_t AcquiredImageDataBaseIndex = IndicesCircularTake(&Handler.AcquiredImageDataIndices);
+    VulkanCheckGoto(vkWaitForFences(Device.Handle, 1, &Handler.InFlightFences[AcquiredImageDataBaseIndex], VK_TRUE, UINT64_MAX), label_Error);
+    vkResetFences(Device.Handle, 1, &Handler.InFlightFences[AcquiredImageDataBaseIndex]);
+    Handler.AcquiredSwapchainImageIndices[AcquiredImageDataBaseIndex] = 0;
+    Handler.AcquiredSwapchainIndices[AcquiredImageDataBaseIndex] = 0;
 
     uint32_t SwapchainsBaseIndex = IndicesCircularGet(&Handler.SwapchainBufIndices, 0);
     AssertMessageGoto(Handler.Swapchains[SwapchainsBaseIndex].AcquiredImageCount > 0, label_Error, "Swapchain acquired image count zero.\n");
