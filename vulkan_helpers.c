@@ -3,7 +3,10 @@
 
 #define VULKAN_NULL_HANDLE 0 // NOTE(blackedout): Somehow VK_NULL_HANDLE generates erros when compiling in cpp mode
 #define VULKAN_INFO_PRINT
-#define MAX_ACQUIRED_IMAGE_COUNT 2
+
+#ifndef MAX_ACQUIRED_IMAGE_COUNT
+#define MAX_ACQUIRED_IMAGE_COUNT 1
+#endif
 #define MAX_SWAPCHAIN_COUNT (MAX_ACQUIRED_IMAGE_COUNT + 1)
 
 typedef struct {
@@ -74,12 +77,6 @@ typedef struct {
 } vulkan_acquired_image;
 
 typedef struct {
-    VkPipelineLayout Layout;
-    VkRenderPass RenderPass;
-    VkPipeline Pipeline;
-} vulkan_graphics_pipeline_info;
-
-typedef struct {
     VkShaderModule Vert, Frag;
 } vulkan_shader;
 
@@ -95,17 +92,18 @@ typedef struct {
 } vulkan_subbuf;
 
 typedef struct {
-    VkImage Handle;
-    VkImageView ViewHandle;
     VkImageType Type;
     VkImageViewType ViewType;
     VkFormat Format;
-    uint32_t Width;
-    uint32_t Height;
-    uint32_t Depth;
+    uint32_t Width, Height, Depth;
 
     uint64_t ByteCount;
     void *Source;
+} vulkan_image_description;
+
+typedef struct {
+    VkImage Handle;
+    VkImageView ViewHandle;
     uint64_t Offset;
 } vulkan_image;
 
@@ -115,9 +113,6 @@ typedef struct {
 
     uint32_t MemoryCount;
     VkDeviceMemory MemoryBufs[3];
-
-    uint32_t ImageCount;
-    vulkan_image *Images;
 } vulkan_static_buffers;
 
 typedef struct {
@@ -246,10 +241,10 @@ label_Error:
 }
 
 // MARK: Memory, Buffers
-static int VulkanGetBufferMemoryTypeIndex(vulkan_surface_device Device, uint32_t MemoryTypeBits, VkMemoryPropertyFlags MemoryPropertyFlags, uint32_t *MemoryTypeIndex) {
-     // TODO(blackedout): Make this part of vulkan_surface_device?
+static int VulkanGetBufferMemoryTypeIndex(vulkan_surface_device *Device, uint32_t MemoryTypeBits, VkMemoryPropertyFlags MemoryPropertyFlags, uint32_t *MemoryTypeIndex) {
+    // TODO(blackedout): Make this part of vulkan_surface_device?
     VkPhysicalDeviceMemoryProperties PhysicalDeviceMemoryProperties;
-    vkGetPhysicalDeviceMemoryProperties(Device.PhysicalDevice, &PhysicalDeviceMemoryProperties);
+    vkGetPhysicalDeviceMemoryProperties(Device->PhysicalDevice, &PhysicalDeviceMemoryProperties);
 
     int HasMemoryType = 0;
     uint32_t BestBufferMemoryTypeIndex;
@@ -270,12 +265,15 @@ static int VulkanGetBufferMemoryTypeIndex(vulkan_surface_device Device, uint32_t
     return 0;
 }
 
-static void VulkanDestroyBuffer(vulkan_surface_device Device, vulkan_buffer Buffer) {
-    vkDestroyBuffer(Device.Handle, Buffer.Handle, 0);
-    vkFreeMemory(Device.Handle, Buffer.Memory, 0);
+static void VulkanDestroyBuffer(vulkan_surface_device *Device, vulkan_buffer Buffer) {
+    VkDevice DeviceHandle = Device->Handle;
+    vkDestroyBuffer(DeviceHandle, Buffer.Handle, 0);
+    vkFreeMemory(DeviceHandle, Buffer.Memory, 0);
 }
 
-static int VulkanCreateExclusiveBufferWithMemory(vulkan_surface_device Device, uint64_t ByteCount, VkBufferUsageFlags UsageFlags, VkMemoryPropertyFlags MemoryPropertyFlags, vulkan_buffer *Buffer) {
+static int VulkanCreateExclusiveBufferWithMemory(vulkan_surface_device *Device, uint64_t ByteCount, VkBufferUsageFlags UsageFlags, VkMemoryPropertyFlags MemoryPropertyFlags, vulkan_buffer *Buffer) {
+    VkDevice DeviceHandle = Device->Handle;
+
     VkBufferCreateInfo BufferCreateInfo = {
         .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
         .pNext = 0,
@@ -288,10 +286,10 @@ static int VulkanCreateExclusiveBufferWithMemory(vulkan_surface_device Device, u
     };
 
     VkBuffer BufferHandle;
-    VulkanCheckGoto(vkCreateBuffer(Device.Handle, &BufferCreateInfo, 0, &BufferHandle), label_Error);
+    VulkanCheckGoto(vkCreateBuffer(DeviceHandle, &BufferCreateInfo, 0, &BufferHandle), label_Error);
 
     VkMemoryRequirements BufferMemoryRequirements;
-    vkGetBufferMemoryRequirements(Device.Handle, BufferHandle, &BufferMemoryRequirements);
+    vkGetBufferMemoryRequirements(DeviceHandle, BufferHandle, &BufferMemoryRequirements);
 
     uint32_t BufferMemoryTypeIndex;
     CheckGoto(VulkanGetBufferMemoryTypeIndex(Device, BufferMemoryRequirements.memoryTypeBits, MemoryPropertyFlags, &BufferMemoryTypeIndex), label_Buffer);
@@ -304,8 +302,8 @@ static int VulkanCreateExclusiveBufferWithMemory(vulkan_surface_device Device, u
     };
 
     VkDeviceMemory BufferMemoryHandle;
-    VulkanCheckGoto(vkAllocateMemory(Device.Handle, &MemoryAllocateInfo, 0, &BufferMemoryHandle), label_Buffer);
-    VulkanCheckGoto(vkBindBufferMemory(Device.Handle, BufferHandle, BufferMemoryHandle, 0), label_Memory);
+    VulkanCheckGoto(vkAllocateMemory(DeviceHandle, &MemoryAllocateInfo, 0, &BufferMemoryHandle), label_Buffer);
+    VulkanCheckGoto(vkBindBufferMemory(DeviceHandle, BufferHandle, BufferMemoryHandle, 0), label_Memory);
 
     vulkan_buffer LocalBuffer = {
         .Handle = BufferHandle,
@@ -316,14 +314,16 @@ static int VulkanCreateExclusiveBufferWithMemory(vulkan_surface_device Device, u
     return 0;
     
 label_Memory:
-    vkFreeMemory(Device.Handle, BufferMemoryHandle, 0);
+    vkFreeMemory(DeviceHandle, BufferMemoryHandle, 0);
 label_Buffer:
-    vkDestroyBuffer(Device.Handle, BufferHandle, 0);
+    vkDestroyBuffer(DeviceHandle, BufferHandle, 0);
 label_Error:
     return 1;
 }
 
-static int VulkanCreateExclusiveImageWithMemoryAndView(vulkan_surface_device Device, VkImageType Type, VkFormat Format, uint32_t Width, uint32_t Height, uint32_t Depth, VkSampleCountFlagBits SampleCount, VkImageUsageFlags Usage, VkMemoryPropertyFlags MemoryProperties, VkImageViewType ViewType, VkImageAspectFlags ViewAspect, VkImage *Image, VkDeviceMemory *ImageMemory, VkImageView *ImageView) {
+static int VulkanCreateExclusiveImageWithMemoryAndView(vulkan_surface_device *Device, VkImageType Type, VkFormat Format, uint32_t Width, uint32_t Height, uint32_t Depth, VkSampleCountFlagBits SampleCount, VkImageUsageFlags Usage, VkMemoryPropertyFlags MemoryProperties, VkImageViewType ViewType, VkImageAspectFlags ViewAspect, VkImage *Image, VkDeviceMemory *ImageMemory, VkImageView *ImageView) {
+    VkDevice DeviceHandle = Device->Handle;
+
     VkImageCreateInfo CreateInfo = {
         .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
         .pNext = 0,
@@ -345,10 +345,10 @@ static int VulkanCreateExclusiveImageWithMemoryAndView(vulkan_surface_device Dev
     };
 
     VkImage ImageHandle;
-    VulkanCheckGoto(vkCreateImage(Device.Handle, &CreateInfo, 0, &ImageHandle), label_Error);
+    VulkanCheckGoto(vkCreateImage(DeviceHandle, &CreateInfo, 0, &ImageHandle), label_Error);
 
     VkMemoryRequirements MemoryRequirements;
-    vkGetImageMemoryRequirements(Device.Handle, ImageHandle, &MemoryRequirements);
+    vkGetImageMemoryRequirements(DeviceHandle, ImageHandle, &MemoryRequirements);
 
     uint32_t MemoryTypeIndex;
     CheckGoto(VulkanGetBufferMemoryTypeIndex(Device, MemoryRequirements.memoryTypeBits, MemoryProperties, &MemoryTypeIndex), label_Image);
@@ -360,8 +360,8 @@ static int VulkanCreateExclusiveImageWithMemoryAndView(vulkan_surface_device Dev
         .memoryTypeIndex = MemoryTypeIndex
     };
     VkDeviceMemory Memory;
-    VulkanCheckGoto(vkAllocateMemory(Device.Handle, &MemoryAllocateInfo, 0, &Memory), label_Image);
-    VulkanCheckGoto(vkBindImageMemory(Device.Handle, ImageHandle, Memory, 0), label_Memory);
+    VulkanCheckGoto(vkAllocateMemory(DeviceHandle, &MemoryAllocateInfo, 0, &Memory), label_Image);
+    VulkanCheckGoto(vkBindImageMemory(DeviceHandle, ImageHandle, Memory, 0), label_Memory);
 
     VkImageViewCreateInfo ViewCreateInfo = {
         .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
@@ -381,7 +381,7 @@ static int VulkanCreateExclusiveImageWithMemoryAndView(vulkan_surface_device Dev
     };
 
     VkImageView ViewHandle;
-    VulkanCheckGoto(vkCreateImageView(Device.Handle, &ViewCreateInfo, 0, &ViewHandle), label_Memory);
+    VulkanCheckGoto(vkCreateImageView(DeviceHandle, &ViewCreateInfo, 0, &ViewHandle), label_Memory);
 
     *Image = ImageHandle;
     *ImageMemory = Memory;
@@ -390,27 +390,31 @@ static int VulkanCreateExclusiveImageWithMemoryAndView(vulkan_surface_device Dev
     return 0;
 
 label_Memory:
-    vkFreeMemory(Device.Handle, Memory, 0);
+    vkFreeMemory(DeviceHandle, Memory, 0);
 label_Image:
-    vkDestroyImage(Device.Handle, ImageHandle, 0);
+    vkDestroyImage(DeviceHandle, ImageHandle, 0);
 label_Error:
     return 1;
 }
 
 // MARK: Static Buffers
-static void VulkanDestroyStaticImagesAndBuffers(vulkan_surface_device Device, vulkan_static_buffers StaticBuffers) {
-    for(uint32_t I = 0; I < StaticBuffers.ImageCount; ++I) {
-        vkDestroyImage(Device.Handle, StaticBuffers.Images[I].Handle, 0);
-        vkDestroyImageView(Device.Handle, StaticBuffers.Images[I].ViewHandle, 0);
+static void VulkanDestroyStaticBuffersAndImages(vulkan_surface_device *Device, vulkan_static_buffers StaticBuffers, vulkan_image *Images, uint32_t ImageCount) {
+    VkDevice DeviceHandle = Device->Handle;
+
+    for(uint32_t I = 0; I < ImageCount; ++I) {
+        vkDestroyImage(DeviceHandle, Images[I].Handle, 0);
+        vkDestroyImageView(DeviceHandle, Images[I].ViewHandle, 0);
     }
     for(uint32_t I = 0; I < StaticBuffers.MemoryCount; ++I) {
-        vkFreeMemory(Device.Handle, StaticBuffers.MemoryBufs[I], 0);
+        vkFreeMemory(DeviceHandle, StaticBuffers.MemoryBufs[I], 0);
     }
-    vkDestroyBuffer(Device.Handle, StaticBuffers.IndexHandle, 0);
-    vkDestroyBuffer(Device.Handle, StaticBuffers.VertexHandle, 0);
+    vkDestroyBuffer(DeviceHandle, StaticBuffers.IndexHandle, 0);
+    vkDestroyBuffer(DeviceHandle, StaticBuffers.VertexHandle, 0);
 }
 
-static int VulkanCreateStaticImagesAndBuffers(vulkan_surface_device Device, vulkan_mesh_subbuf *MeshSubbufs, uint32_t MeshSubbufCount, vulkan_image *Images, uint32_t ImageCount, VkCommandPool TransferCommandPool, VkQueue TransferQueue, vulkan_static_buffers *StaticBuffers) {
+static int VulkanCreateStaticBuffersAndImages(vulkan_surface_device *Device, vulkan_mesh_subbuf *MeshSubbufs, uint32_t MeshSubbufCount, vulkan_image_description *ImageDescriptions, uint32_t ImageCount, VkCommandPool TransferCommandPool, VkQueue TransferQueue, vulkan_static_buffers *StaticBuffers, vulkan_image *Images) {
+    VkDevice DeviceHandle = Device->Handle;
+
     uint64_t TotalVertexByteCount = 0;
     uint64_t TotalIndexByteCount = 0;
     for(uint32_t I = 0; I < MeshSubbufCount; ++I) {
@@ -430,18 +434,18 @@ static int VulkanCreateStaticImagesAndBuffers(vulkan_surface_device Device, vulk
         .pQueueFamilyIndices = 0
     };
     VkBuffer VertexBuffer;
-    VulkanCheckGoto(vkCreateBuffer(Device.Handle, &BufferCreateInfo, 0, &VertexBuffer), label_Error);
+    VulkanCheckGoto(vkCreateBuffer(DeviceHandle, &BufferCreateInfo, 0, &VertexBuffer), label_Error);
 
     BufferCreateInfo.size = TotalIndexByteCount;
     BufferCreateInfo.usage = VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
 
     VkBuffer IndexBuffer;
-    VulkanCheckGoto(vkCreateBuffer(Device.Handle, &BufferCreateInfo, 0, &IndexBuffer), label_VertexBuffer);
+    VulkanCheckGoto(vkCreateBuffer(DeviceHandle, &BufferCreateInfo, 0, &IndexBuffer), label_VertexBuffer);
 
     // NOTE(blackedout): Allocate and bind uniform memory with joined vertex and index requirements to the respective buffers 
     VkMemoryRequirements VertexMemoryRequirements, IndexMemoryRequirements;
-    vkGetBufferMemoryRequirements(Device.Handle, VertexBuffer, &VertexMemoryRequirements);
-    vkGetBufferMemoryRequirements(Device.Handle, IndexBuffer, &IndexMemoryRequirements);
+    vkGetBufferMemoryRequirements(DeviceHandle, VertexBuffer, &VertexMemoryRequirements);
+    vkGetBufferMemoryRequirements(DeviceHandle, IndexBuffer, &IndexMemoryRequirements);
 
     // TODO(blackedout): Handle non uniform device memory necessity
     uint32_t BufferMemoryTypeIndex;
@@ -458,26 +462,26 @@ static int VulkanCreateStaticImagesAndBuffers(vulkan_surface_device Device, vulk
         .memoryTypeIndex = BufferMemoryTypeIndex
     };
     VkDeviceMemory BufferMemoryHandle;
-    VulkanCheckGoto(vkAllocateMemory(Device.Handle, &MemoryAllocateInfo, 0, &BufferMemoryHandle), label_IndexBuffer);
+    VulkanCheckGoto(vkAllocateMemory(DeviceHandle, &MemoryAllocateInfo, 0, &BufferMemoryHandle), label_IndexBuffer);
 
-    VulkanCheckGoto(vkBindBufferMemory(Device.Handle, VertexBuffer, BufferMemoryHandle, VertexByteOffset), label_BufferMemory);
-    VulkanCheckGoto(vkBindBufferMemory(Device.Handle, IndexBuffer, BufferMemoryHandle, IndexByteOffset), label_BufferMemory);
+    VulkanCheckGoto(vkBindBufferMemory(DeviceHandle, VertexBuffer, BufferMemoryHandle, VertexByteOffset), label_BufferMemory);
+    VulkanCheckGoto(vkBindBufferMemory(DeviceHandle, IndexBuffer, BufferMemoryHandle, IndexByteOffset), label_BufferMemory);
 
     // NOTE(blackedout): Create image handles, allocate and bind its memory, then create view handles
     uint64_t AlignedTotalImagesByteCount = 0;
     uint32_t ImageMemoryTypeBits = ~(uint32_t)0;
     uint32_t CreatedImageCount = 0;
     for(uint32_t I = 0; I < ImageCount; ++I) {
-        vulkan_image Image = Images[I];
+        vulkan_image_description ImageDescription = ImageDescriptions[I];
         VkImageCreateInfo ImageCreateInfo = {
             .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
             .pNext = 0,
             .flags = 0,
-            .imageType = Image.Type,
-            .format = Image.Format,
-            .extent.width = Image.Width,
-            .extent.height = Image.Height,
-            .extent.depth = Image.Depth,
+            .imageType = ImageDescription.Type,
+            .format = ImageDescription.Format,
+            .extent.width = ImageDescription.Width,
+            .extent.height = ImageDescription.Height,
+            .extent.depth = ImageDescription.Depth,
             .mipLevels = 1,
             .arrayLayers = 1,
             .samples = VK_SAMPLE_COUNT_1_BIT,
@@ -488,21 +492,19 @@ static int VulkanCreateStaticImagesAndBuffers(vulkan_surface_device Device, vulk
             .pQueueFamilyIndices = 0,
             .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED
         };
-
-        VulkanCheckGoto(vkCreateImage(Device.Handle, &ImageCreateInfo, 0, &Image.Handle), label_Images);
+        
+        VulkanCheckGoto(vkCreateImage(DeviceHandle, &ImageCreateInfo, 0, &Images[I].Handle), label_Images);
         ++CreatedImageCount;
 
         VkMemoryRequirements ImageMemoryRequirements;
-        vkGetImageMemoryRequirements(Device.Handle, Image.Handle, &ImageMemoryRequirements);
+        vkGetImageMemoryRequirements(DeviceHandle, Images[I].Handle, &ImageMemoryRequirements);
 
         uint64_t ByteOffset = AlignAny(AlignedTotalImagesByteCount, uint64_t, ImageMemoryRequirements.alignment);
         AlignedTotalImagesByteCount += ByteOffset + ImageMemoryRequirements.size;
-        Image.Offset = ByteOffset;
+        Images[I].Offset = ByteOffset;
 
         // TODO(blackedout): Handle this getting too restrictive
         ImageMemoryTypeBits &= ImageMemoryRequirements.memoryTypeBits;
-
-        Images[I] = Image;
     }
     uint32_t ImageMemoryTypeIndex;
     CheckGoto(VulkanGetBufferMemoryTypeIndex(Device, ImageMemoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &ImageMemoryTypeIndex), label_Images);
@@ -513,21 +515,21 @@ static int VulkanCreateStaticImagesAndBuffers(vulkan_surface_device Device, vulk
         .memoryTypeIndex = ImageMemoryTypeIndex
     };
     VkDeviceMemory ImageMemoryHandle;
-    VulkanCheckGoto(vkAllocateMemory(Device.Handle, &ImageMemoryAllocateInfo, 0, &ImageMemoryHandle), label_Images);
+    VulkanCheckGoto(vkAllocateMemory(DeviceHandle, &ImageMemoryAllocateInfo, 0, &ImageMemoryHandle), label_Images);
     for(uint32_t I = 0; I < ImageCount; ++I) {
-        VulkanCheckGoto(vkBindImageMemory(Device.Handle, Images[I].Handle, ImageMemoryHandle, Images[I].Offset), label_ImageMemory);
+        VulkanCheckGoto(vkBindImageMemory(DeviceHandle, Images[I].Handle, ImageMemoryHandle, Images[I].Offset), label_ImageMemory);
     }
 
     uint32_t CreatedImageViewCount = 0;
     for(uint32_t I = 0; I < ImageCount; ++I) {
-        vulkan_image Image = Images[I];
+        vulkan_image_description ImageDescription = ImageDescriptions[I];
         VkImageViewCreateInfo ImageViewCreateInfo = {
             .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
             .pNext = 0,
             .flags = 0,
-            .image = Image.Handle,
-            .viewType = Image.ViewType,
-            .format = Image.Format,
+            .image = Images[I].Handle,
+            .viewType = ImageDescription.ViewType,
+            .format = ImageDescription.Format,
             .components = { .r = VK_COMPONENT_SWIZZLE_IDENTITY, .g = VK_COMPONENT_SWIZZLE_IDENTITY, .b = VK_COMPONENT_SWIZZLE_IDENTITY, .a = VK_COMPONENT_SWIZZLE_IDENTITY },
             .subresourceRange = {
                 .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
@@ -538,10 +540,8 @@ static int VulkanCreateStaticImagesAndBuffers(vulkan_surface_device Device, vulk
             }
         };
 
-        VulkanCheckGoto(vkCreateImageView(Device.Handle, &ImageViewCreateInfo, 0, &Image.ViewHandle), label_ImageViews);
+        VulkanCheckGoto(vkCreateImageView(DeviceHandle, &ImageViewCreateInfo, 0, &Images[I].ViewHandle), label_ImageViews);
         ++CreatedImageViewCount;
-
-        Images[I] = Image;
     }
 
     // NOTE(blackedout): Create and fill staging buffer
@@ -549,7 +549,7 @@ static int VulkanCreateStaticImagesAndBuffers(vulkan_surface_device Device, vulk
     CheckGoto(VulkanCreateExclusiveBufferWithMemory(Device, AlignedTotalBuffersByteCount + AlignedTotalImagesByteCount, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &StagingBuffer), label_ImageMemory);
 
     void *MappedStagingBuffer;
-    VulkanCheckGoto(vkMapMemory(Device.Handle, StagingBuffer.Memory, 0, AlignedTotalBuffersByteCount, 0, &MappedStagingBuffer), label_StagingBuffer);
+    VulkanCheckGoto(vkMapMemory(DeviceHandle, StagingBuffer.Memory, 0, AlignedTotalBuffersByteCount, 0, &MappedStagingBuffer), label_StagingBuffer);
     uint64_t VertexOffset = 0, IndexOffset = 0;
     for(uint32_t I = 0; I < MeshSubbufCount; ++I) {
         vulkan_mesh_subbuf Subbuf = MeshSubbufs[I];
@@ -566,10 +566,11 @@ static int VulkanCreateStaticImagesAndBuffers(vulkan_surface_device Device, vulk
     }
     uint64_t ImageOffset = 0;
     for(uint32_t I = 0; I < ImageCount; ++I) {
-        memcpy(MappedStagingBuffer + AlignedTotalBuffersByteCount + ImageOffset, Images[I].Source, Images[I].ByteCount);
-        ImageOffset = Images[I].ByteCount;
+        vulkan_image_description ImageDescription = ImageDescriptions[I];
+        memcpy(MappedStagingBuffer + AlignedTotalBuffersByteCount + ImageOffset, ImageDescription.Source, ImageDescription.ByteCount);
+        ImageOffset = ImageDescription.ByteCount;
     }
-    vkUnmapMemory(Device.Handle, StagingBuffer.Memory);
+    vkUnmapMemory(DeviceHandle, StagingBuffer.Memory);
 
     // NOTE(blackedout): Allocate transfer command buffer, record transfer of data, submit and wait for completion
     VkCommandBufferAllocateInfo TransferCommandBufferAllocateInfo = {
@@ -580,7 +581,7 @@ static int VulkanCreateStaticImagesAndBuffers(vulkan_surface_device Device, vulk
         .commandBufferCount = 1,
     };
     VkCommandBuffer TransferCommandBuffer;
-    VulkanCheckGoto(vkAllocateCommandBuffers(Device.Handle, &TransferCommandBufferAllocateInfo, &TransferCommandBuffer), label_StagingBuffer);
+    VulkanCheckGoto(vkAllocateCommandBuffers(DeviceHandle, &TransferCommandBufferAllocateInfo, &TransferCommandBuffer), label_StagingBuffer);
 
     VkCommandBufferBeginInfo TransferBeginInfo = {
         .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
@@ -634,7 +635,7 @@ static int VulkanCreateStaticImagesAndBuffers(vulkan_surface_device Device, vulk
             .imageSubresource.baseArrayLayer = 0,
             .imageSubresource.layerCount = 1,
             .imageOffset = { 0, 0, 0 },
-            .imageExtent = { Images[I].Width, Images[I].Height, Images[I].Depth } // TODO
+            .imageExtent = { ImageDescriptions[I].Width, ImageDescriptions[I].Height, ImageDescriptions[I].Depth } // TODO
         };
         vkCmdCopyBufferToImage(TransferCommandBuffer, StagingBuffer.Handle, Images[I].Handle, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &BufferImageCopy);
     }
@@ -679,43 +680,42 @@ static int VulkanCreateStaticImagesAndBuffers(vulkan_surface_device Device, vulk
         .IndexHandle = IndexBuffer,
         .MemoryCount = 2,
         .MemoryBufs = { BufferMemoryHandle, ImageMemoryHandle, VULKAN_NULL_HANDLE },
-
-        .ImageCount = ImageCount,
-        .Images = Images
     };
     *StaticBuffers = LocalStaticBuffers;
 
-    vkFreeCommandBuffers(Device.Handle, TransferCommandPool, 1, &TransferCommandBuffer);
+    vkFreeCommandBuffers(DeviceHandle, TransferCommandPool, 1, &TransferCommandBuffer);
     VulkanDestroyBuffer(Device, StagingBuffer);
 
     return 0;
 
 label_CommandBuffer:
-    vkFreeCommandBuffers(Device.Handle, TransferCommandPool, 1, &TransferCommandBuffer);
+    vkFreeCommandBuffers(DeviceHandle, TransferCommandPool, 1, &TransferCommandBuffer);
 label_StagingBuffer:
     VulkanDestroyBuffer(Device, StagingBuffer);
 label_ImageViews:
     for(uint32_t I = 0; I < CreatedImageViewCount; ++I) {
-        vkDestroyImageView(Device.Handle, Images[I].ViewHandle, 0);
+        vkDestroyImageView(DeviceHandle, Images[I].ViewHandle, 0);
     }
 label_ImageMemory:
-    vkFreeMemory(Device.Handle, ImageMemoryHandle, 0);
+    vkFreeMemory(DeviceHandle, ImageMemoryHandle, 0);
 label_Images:
     for(uint32_t I = 0; I < CreatedImageCount; ++I) {
-        vkDestroyImage(Device.Handle, Images[I].Handle, 0);
+        vkDestroyImage(DeviceHandle, Images[I].Handle, 0);
     }
 label_BufferMemory:
-    vkFreeMemory(Device.Handle, BufferMemoryHandle, 0);
+    vkFreeMemory(DeviceHandle, BufferMemoryHandle, 0);
 label_IndexBuffer:
-    vkDestroyBuffer(Device.Handle, IndexBuffer, 0);
+    vkDestroyBuffer(DeviceHandle, IndexBuffer, 0);
 label_VertexBuffer:
-    vkDestroyBuffer(Device.Handle, VertexBuffer, 0);
+    vkDestroyBuffer(DeviceHandle, VertexBuffer, 0);
 label_Error:
     return 1;
 }
 
 // MARK: Shaders
-static int VulkanCreateShaderModule(vulkan_surface_device Device, const uint8_t *Bytes, uint64_t ByteCount, VkShaderModule *Module) {
+static int VulkanCreateShaderModule(vulkan_surface_device *Device, const uint8_t *Bytes, uint64_t ByteCount, VkShaderModule *Module) {
+    VkDevice DeviceHandle = Device->Handle;
+
     AssertMessageGoto(ByteCount < (uint64_t)SIZE_T_MAX, label_Error, "Too many bytes in shader code.\n");
     VkShaderModuleCreateInfo CreateInfo = {
         .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
@@ -725,7 +725,7 @@ static int VulkanCreateShaderModule(vulkan_surface_device Device, const uint8_t 
         .pCode = (uint32_t *)Bytes
     };
     VkShaderModule LocalModule;
-    VulkanCheckGoto(vkCreateShaderModule(Device.Handle, &CreateInfo, 0, &LocalModule), label_Error);
+    VulkanCheckGoto(vkCreateShaderModule(DeviceHandle, &CreateInfo, 0, &LocalModule), label_Error);
     *Module = LocalModule;
 
     return 0;
@@ -740,13 +740,15 @@ typedef struct {
     uint32_t BindingsCount;
 } vulkan_descriptor_set_layout_description;
 
-static void VulkanDestroyDescriptorSetLayouts(vulkan_surface_device Device, VkDescriptorSetLayout *DescriptorSetLayouts, uint32_t Count) {
+static void VulkanDestroyDescriptorSetLayouts(vulkan_surface_device *Device, VkDescriptorSetLayout *DescriptorSetLayouts, uint32_t Count) {
+    VkDevice DeviceHandle = Device->Handle;
     for(uint32_t I = 0; I < Count; ++I) {
-        vkDestroyDescriptorSetLayout(Device.Handle, DescriptorSetLayouts[I], 0);
+        vkDestroyDescriptorSetLayout(DeviceHandle, DescriptorSetLayouts[I], 0);
     }
 }
 
-static int VulkanCreateDescriptorSetLayouts(vulkan_surface_device Device, vulkan_descriptor_set_layout_description *Descriptions, uint32_t Count, VkDescriptorSetLayout *DescriptorSetLayouts) {
+static int VulkanCreateDescriptorSetLayouts(vulkan_surface_device *Device, vulkan_descriptor_set_layout_description *Descriptions, uint32_t Count, VkDescriptorSetLayout *DescriptorSetLayouts) {
+    VkDevice DeviceHandle = Device->Handle;
     VkDescriptorSetLayoutCreateInfo DescriptorSetLayoutCreateInfo = {
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
         .pNext = 0,
@@ -762,7 +764,7 @@ static int VulkanCreateDescriptorSetLayouts(vulkan_surface_device Device, vulkan
         DescriptorSetLayoutCreateInfo.bindingCount = Description.BindingsCount;
         DescriptorSetLayoutCreateInfo.pBindings = Description.Bindings;
         
-        VulkanCheckGoto(vkCreateDescriptorSetLayout(Device.Handle, &DescriptorSetLayoutCreateInfo, 0, DescriptorSetLayouts + CreatedCount), label_Error);
+        VulkanCheckGoto(vkCreateDescriptorSetLayout(DeviceHandle, &DescriptorSetLayoutCreateInfo, 0, DescriptorSetLayouts + CreatedCount), label_Error);
     }
 
     return 0;
@@ -780,7 +782,9 @@ typedef struct {
     VkDeviceSize Size;
 } vulkan_shader_uniform_buffers_description;
 
-static int VulkanCreateShaderUniformBuffers(vulkan_surface_device Device, VkDescriptorSetLayout DescriptorSetLayout, vulkan_shader_uniform_buffers_description *Descriptions, uint32_t Count, VkDeviceMemory *BufferMemory, VkDescriptorPool *DescriptorPool) {
+static int VulkanCreateShaderUniformBuffers(vulkan_surface_device *Device, VkDescriptorSetLayout DescriptorSetLayout, vulkan_shader_uniform_buffers_description *Descriptions, uint32_t Count, VkDeviceMemory *BufferMemory, VkDescriptorPool *DescriptorPool) {
+    VkDevice DeviceHandle = Device->Handle;
+
     VkBufferCreateInfo BufferCreateInfo = {
         .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
         .pNext = 0,
@@ -801,13 +805,13 @@ static int VulkanCreateShaderUniformBuffers(vulkan_surface_device Device, VkDesc
         
         for(uint32_t J = 0; J < MAX_ACQUIRED_IMAGE_COUNT; ++J) {
             VkBuffer Buffer;
-            VulkanCheckGoto(vkCreateBuffer(Device.Handle, &BufferCreateInfo, 0, &Buffer), label_Buffers);
+            VulkanCheckGoto(vkCreateBuffer(DeviceHandle, &BufferCreateInfo, 0, &Buffer), label_Buffers);
             Description.Buffers[J] = Buffer;
             ++CreatedCount;
         }
 
         VkMemoryRequirements MemoryRequirements;
-        vkGetBufferMemoryRequirements(Device.Handle, Description.Buffers[0], &MemoryRequirements);
+        vkGetBufferMemoryRequirements(DeviceHandle, Description.Buffers[0], &MemoryRequirements);
 
         CommonMemoryTypeBits &= MemoryRequirements.memoryTypeBits;
 
@@ -831,18 +835,18 @@ static int VulkanCreateShaderUniformBuffers(vulkan_surface_device Device, VkDesc
     };
 
     VkDeviceMemory Memory;
-    VulkanCheckGoto(vkAllocateMemory(Device.Handle, &MemoryAllocateInfo, 0, &Memory), label_Buffers);
+    VulkanCheckGoto(vkAllocateMemory(DeviceHandle, &MemoryAllocateInfo, 0, &Memory), label_Buffers);
 
     // TODO(blackedout): Map whole buffer or individual chunks?
     uint8_t *MappedMemory;
-    VulkanCheckGoto(vkMapMemory(Device.Handle, Memory, 0, TotalByteCount, 0, (void **)&MappedMemory), label_Memory);
+    VulkanCheckGoto(vkMapMemory(DeviceHandle, Memory, 0, TotalByteCount, 0, (void **)&MappedMemory), label_Memory);
 
     for(uint32_t I = 0; I < Count; ++I) {
         for(uint32_t J = 0; J < MAX_ACQUIRED_IMAGE_COUNT; ++J) {
             vulkan_shader_uniform_buffers_description Description = Descriptions[I];
 
             uint64_t Offset = (uint64_t)Description.MappedBuffers[J];
-            VulkanCheckGoto(vkBindBufferMemory(Device.Handle, Description.Buffers[J], Memory, Offset), label_Memory);
+            VulkanCheckGoto(vkBindBufferMemory(DeviceHandle, Description.Buffers[J], Memory, Offset), label_Memory);
             Description.MappedBuffers[J] = (void *)(MappedMemory + Offset);
         }
     }
@@ -867,7 +871,7 @@ static int VulkanCreateShaderUniformBuffers(vulkan_surface_device Device, VkDesc
     };
 
     VkDescriptorPool LocalDescriptorPool;
-    VulkanCheckGoto(vkCreateDescriptorPool(Device.Handle, &DescriptorPoolCreateInfo, 0, &LocalDescriptorPool), label_Memory);    
+    VulkanCheckGoto(vkCreateDescriptorPool(DeviceHandle, &DescriptorPoolCreateInfo, 0, &LocalDescriptorPool), label_Memory);    
     
     VkDescriptorSetLayout DescriptorSetLayouts[MAX_ACQUIRED_IMAGE_COUNT];
     for(uint32_t J = 0; J < ArrayCount(DescriptorSetLayouts); ++J) {
@@ -885,7 +889,7 @@ static int VulkanCreateShaderUniformBuffers(vulkan_surface_device Device, VkDesc
         };
 
         // NOTE(blackedout): The length of Description.DescriptorSets must be ArrayCount(DescriptorSetLayouts)
-        VulkanCheckGoto(vkAllocateDescriptorSets(Device.Handle, &DescriptorSetAllocateInfo, Description.DescriptorSets), label_DescriptorPool);
+        VulkanCheckGoto(vkAllocateDescriptorSets(DeviceHandle, &DescriptorSetAllocateInfo, Description.DescriptorSets), label_DescriptorPool);
 
         VkDescriptorBufferInfo BufferInfos[ArrayCount(DescriptorSetLayouts)];
         VkWriteDescriptorSet WriteDescriptorSets[ArrayCount(DescriptorSetLayouts)];
@@ -912,7 +916,7 @@ static int VulkanCreateShaderUniformBuffers(vulkan_surface_device Device, VkDesc
             BufferInfos[J] = BufferInfo;
             WriteDescriptorSets[J] = WriteDescriptorSet;
         }
-        vkUpdateDescriptorSets(Device.Handle, ArrayCount(WriteDescriptorSets), WriteDescriptorSets, 0, 0);
+        vkUpdateDescriptorSets(DeviceHandle, ArrayCount(WriteDescriptorSets), WriteDescriptorSets, 0, 0);
     }
 
     *BufferMemory = Memory;
@@ -920,17 +924,17 @@ static int VulkanCreateShaderUniformBuffers(vulkan_surface_device Device, VkDesc
     return 0;
 
 label_DescriptorPool:
-    vkDestroyDescriptorPool(Device.Handle, LocalDescriptorPool, 0);
+    vkDestroyDescriptorPool(DeviceHandle, LocalDescriptorPool, 0);
     *DescriptorPool = VULKAN_NULL_HANDLE;
 label_Memory:
-    vkFreeMemory(Device.Handle, Memory, 0);
+    vkFreeMemory(DeviceHandle, Memory, 0);
     *BufferMemory = VULKAN_NULL_HANDLE;
 label_Buffers:
     for(uint32_t I = 0; I < CreatedCount; ++I) {
         vulkan_shader_uniform_buffers_description Description = Descriptions[I / MAX_ACQUIRED_IMAGE_COUNT];
         uint32_t BufferIndex = (I % MAX_ACQUIRED_IMAGE_COUNT);
 
-        vkDestroyBuffer(Device.Handle, Description.Buffers[BufferIndex], 0);
+        vkDestroyBuffer(DeviceHandle, Description.Buffers[BufferIndex], 0);
         Description.Buffers[BufferIndex] = VULKAN_NULL_HANDLE;
         Description.MappedBuffers[BufferIndex] = 0;
     }
@@ -938,15 +942,15 @@ label_Buffers:
 }
 
 // MARK: Instace
-// NOTE(blackedout): Input the instance extensions that are required by the platform.
-static int VulkanCreateInstance(const char **PlatformInstanceExtensions, uint32_t PlatformInstanceExtensionCount, VkInstance *Instance) {
+static int VulkanCreateInstance(const char **PlatformRequiredInstanceExtensions, uint32_t PlatformRequiredInstanceExtensionCount, VkInstance *Instance) {
     const char *InstanceExtensions[16];
     // NOTE(blackedout): Leave room for additional 1 extensions (portability extension)
-    AssertMessageGoto(PlatformInstanceExtensionCount <= 15, label_Error, "Too many required instance extensions (%d). Increase array buffer size to fix.\n", PlatformInstanceExtensionCount);
+    AssertMessageGoto(PlatformRequiredInstanceExtensionCount <= 15, label_Error,
+                      "Too many required instance extensions (%d). Increase array buffer size to fix.\n", PlatformRequiredInstanceExtensionCount);
     
     uint32_t InstanceExtensionCount;
-    for(InstanceExtensionCount = 0; InstanceExtensionCount < PlatformInstanceExtensionCount; ++InstanceExtensionCount) {
-        InstanceExtensions[InstanceExtensionCount] = PlatformInstanceExtensions[InstanceExtensionCount];
+    for(InstanceExtensionCount = 0; InstanceExtensionCount < PlatformRequiredInstanceExtensionCount; ++InstanceExtensionCount) {
+        InstanceExtensions[InstanceExtensionCount] = PlatformRequiredInstanceExtensions[InstanceExtensionCount];
     }
 
     VkApplicationInfo VulkanApplicationInfo = {
@@ -990,7 +994,7 @@ static int VulkanCreateInstance(const char **PlatformInstanceExtensions, uint32_
 #ifdef VULKAN_INFO_PRINT
     printf("Vulkan Instance Extensions (%d):\n", InstanceExtensionCount);
     for(uint32_t I = 0; I < InstanceExtensionCount; ++I) {
-        printf("[%d] %s%s\n", I, InstanceExtensions[I], (I < PlatformInstanceExtensionCount)? " (platform)" : "");
+        printf("[%d] %s%s\n", I, InstanceExtensions[I], (I < PlatformRequiredInstanceExtensionCount)? " (platform)" : "");
     }
 #endif
     
@@ -1003,9 +1007,9 @@ label_Error:
 }
 
 // MARK: Surface Device
-static void VulkanDestroySurfaceDevice(VkInstance Instance, vulkan_surface_device Device) {
-    vkDestroySurfaceKHR(Instance, Device.Surface, 0);
-    vkDestroyDevice(Device.Handle, 0);
+static void VulkanDestroySurfaceDevice(VkInstance Instance, vulkan_surface_device *Device) {
+    vkDestroySurfaceKHR(Instance, Device->Surface, 0);
+    vkDestroyDevice(Device->Handle, 0);
 }
 
 static int VulkanCreateSurfaceDevice(VkInstance Instance, VkSurfaceKHR Surface, vulkan_surface_device *Device) {
@@ -1025,7 +1029,7 @@ static int VulkanCreateSurfaceDevice(VkInstance Instance, VkSurfaceKHR Surface, 
     VkSurfaceFormatKHR BestPhysicalDeviceInitialSurfaceFormat;
     VkPhysicalDeviceProperties BestPhysicalDeviceProperties;
     VkPhysicalDeviceFeatures BestPhysicalDeviceFeatures;
-    VkFormat BestPhyiscalDeviceDepthFormat;
+    VkFormat BestPhysicalDeviceDepthFormat;
 
     uint32_t BestPhysicalDeviceScore = 0;
     VkPhysicalDevice BestPhysicalDevice = PhysicalDevices[0];
@@ -1137,7 +1141,7 @@ static int VulkanCreateSurfaceDevice(VkInstance Instance, VkSurfaceKHR Surface, 
 
                 BestPhysicalDeviceProperties = Props;
                 BestPhysicalDeviceFeatures = Features;
-                BestPhyiscalDeviceDepthFormat = BestDepthFormat;
+                BestPhysicalDeviceDepthFormat = BestDepthFormat;
             }
         }
         PhysicalDeviceScores[I] = Score;
@@ -1231,7 +1235,7 @@ static int VulkanCreateSurfaceDevice(VkInstance Instance, VkSurfaceKHR Surface, 
         .Features = BestPhysicalDeviceFeatures,
         .Properties = BestPhysicalDeviceProperties,
 
-        .BestDepthFormat = BestPhyiscalDeviceDepthFormat,
+        .BestDepthFormat = BestPhysicalDeviceDepthFormat,
         .MaxSampleCount = MaxPhysicalDeviceSampleCount
     };
 
@@ -1245,42 +1249,47 @@ label_Error:
 }
 
 // MARK: Swapchain
-static void VulkanDestroySwapchain(vulkan_surface_device Device, vulkan_swapchain Swapchain) {
+static void VulkanDestroySwapchain(vulkan_surface_device *Device, vulkan_swapchain *Swapchain) {
+    VkDevice DeviceHandle = Device->Handle;
+
     // NOTE(blackedout): Only destructible if none of its images are acquired.
-    AssertMessage(Swapchain.AcquiredImageCount == 0, "Swapchain can't be destroyed because at least one of its imagess is still in use.\n");
+    AssertMessage(Swapchain->AcquiredImageCount == 0, "Swapchain can't be destroyed because at least one of its imagess is still in use.\n");
 
-    vkDestroyImageView(Device.Handle, Swapchain.MultiSampleColorImageView, 0);
-    vkFreeMemory(Device.Handle, Swapchain.MultiSampleColorImageMemory, 0);
-    vkDestroyImage(Device.Handle, Swapchain.MultiSampleColorImage, 0);
+    vkDestroyImageView(DeviceHandle, Swapchain->MultiSampleColorImageView, 0);
+    vkFreeMemory(DeviceHandle, Swapchain->MultiSampleColorImageMemory, 0);
+    vkDestroyImage(DeviceHandle, Swapchain->MultiSampleColorImage, 0);
 
-    vkDestroyImageView(Device.Handle, Swapchain.DepthImageView, 0);
-    vkFreeMemory(Device.Handle, Swapchain.DepthImageMemory, 0);
-    vkDestroyImage(Device.Handle, Swapchain.DepthImage, 0);
+    vkDestroyImageView(DeviceHandle, Swapchain->DepthImageView, 0);
+    vkFreeMemory(DeviceHandle, Swapchain->DepthImageMemory, 0);
+    vkDestroyImage(DeviceHandle, Swapchain->DepthImage, 0);
 
-    for(uint32_t I = 0; I < Swapchain.ImageCount; ++I) {
-        vkDestroyFramebuffer(Device.Handle, Swapchain.Framebuffers[I], 0);
-        vkDestroyImageView(Device.Handle, Swapchain.ImageViews[I], 0);
+    for(uint32_t I = 0; I < Swapchain->ImageCount; ++I) {
+        vkDestroyFramebuffer(DeviceHandle, Swapchain->Framebuffers[I], 0);
+        vkDestroyImageView(DeviceHandle, Swapchain->ImageViews[I], 0);
     }
 
-    vkDestroySwapchainKHR(Device.Handle, Swapchain.Handle, 0);
+    vkDestroySwapchainKHR(DeviceHandle, Swapchain->Handle, 0);
 
-    free(Swapchain.ImageBuf);
+    free(Swapchain->ImageBuf);
 }
 
-static int VulkanCreateSwapchain(vulkan_surface_device Device, VkExtent2D Extent, VkSampleCountFlagBits SampleCount, VkRenderPass RenderPass, vulkan_swapchain *OldSwapchain, vulkan_swapchain *Swapchain) {
+static int VulkanCreateSwapchain(vulkan_surface_device *Device, VkExtent2D Extent, VkSampleCountFlagBits SampleCount, VkRenderPass RenderPass, vulkan_swapchain *OldSwapchain, vulkan_swapchain *Swapchain) {
+    VkDevice DeviceHandle = Device->Handle;
+    VkSurfaceKHR DeviceSurface = Device->Surface;
     VkSwapchainKHR OldSwapchainHandle = VULKAN_NULL_HANDLE;
     if(OldSwapchain) {
         OldSwapchainHandle = OldSwapchain->Handle;
     }
 
     VkSurfaceCapabilitiesKHR SurfaceCapabilities;
-    VulkanCheckGoto(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(Device.PhysicalDevice, Device.Surface, &SurfaceCapabilities), label_Error);
-
     VkSurfaceFormatKHR SurfaceFormat;
-    CheckGoto(VulkanPickSurfaceFormat(Device.PhysicalDevice, Device.Surface, &SurfaceFormat, 0), label_Error);
-
     VkPresentModeKHR PresentMode;
-    CheckGoto(VulkanPickSurfacePresentMode(Device.PhysicalDevice, Device.Surface, &PresentMode, 0), label_Error);
+    {
+        VkPhysicalDevice PhysicalDeviceHandle = Device->PhysicalDevice;
+        VulkanCheckGoto(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(PhysicalDeviceHandle, DeviceSurface, &SurfaceCapabilities), label_Error);
+        CheckGoto(VulkanPickSurfaceFormat(PhysicalDeviceHandle, DeviceSurface, &SurfaceFormat, 0), label_Error);
+        CheckGoto(VulkanPickSurfacePresentMode(PhysicalDeviceHandle, DeviceSurface, &PresentMode, 0), label_Error);
+    }
 
     uint32_t MinImageCount = Max(2, SurfaceCapabilities.minImageCount);
     if(SurfaceCapabilities.maxImageCount > 0) {
@@ -1291,11 +1300,11 @@ static int VulkanCreateSwapchain(vulkan_surface_device Device, VkExtent2D Extent
         .height = Clamp(Extent.height, SurfaceCapabilities.minImageExtent.height, SurfaceCapabilities.maxImageExtent.height)
     };
 
-    uint32_t QueueFamilyIndices[] = { Device.GraphicsQueueFamilyIndex, Device.PresentQueueFamilyIndex };
+    uint32_t QueueFamilyIndices[] = { Device->GraphicsQueueFamilyIndex, Device->PresentQueueFamilyIndex };
     VkSharingMode QueueFamilySharingMode = VK_SHARING_MODE_EXCLUSIVE;
     uint32_t QueueFamilyIndexCount = 0;
     uint32_t *QueueFamilyIndicesOptional = 0;
-    if(Device.GraphicsQueueFamilyIndex != Device.PresentQueueFamilyIndex) {
+    if(Device->GraphicsQueueFamilyIndex != Device->PresentQueueFamilyIndex) {
         QueueFamilySharingMode = VK_SHARING_MODE_CONCURRENT;
         QueueFamilyIndexCount = 2;
         QueueFamilyIndicesOptional = QueueFamilyIndices;
@@ -1305,7 +1314,7 @@ static int VulkanCreateSwapchain(vulkan_surface_device Device, VkExtent2D Extent
         .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
         .pNext = 0,
         .flags = 0,
-        .surface = Device.Surface,
+        .surface = DeviceSurface,
         .minImageCount = MinImageCount,
         .imageFormat = SurfaceFormat.format,
         .imageColorSpace = SurfaceFormat.colorSpace,
@@ -1323,10 +1332,10 @@ static int VulkanCreateSwapchain(vulkan_surface_device Device, VkExtent2D Extent
     };
 
     VkSwapchainKHR SwapchainHandle;
-    VulkanCheckGoto(vkCreateSwapchainKHR(Device.Handle, &SwapchainCreateInfo, 0, &SwapchainHandle), label_Error);
+    VulkanCheckGoto(vkCreateSwapchainKHR(DeviceHandle, &SwapchainCreateInfo, 0, &SwapchainHandle), label_Error);
 
     uint32_t SwapchainImageCount = 0;
-    VulkanCheckGoto(vkGetSwapchainImagesKHR(Device.Handle, SwapchainHandle, &SwapchainImageCount, 0), label_Swapchain);
+    VulkanCheckGoto(vkGetSwapchainImagesKHR(DeviceHandle, SwapchainHandle, &SwapchainImageCount, 0), label_Swapchain);
 
     void *ImageBuf;
     VkImage *Images;
@@ -1340,7 +1349,7 @@ static int VulkanCreateSwapchain(vulkan_surface_device Device, VkExtent2D Extent
         };
         CheckGoto(MallocMultiple(ArrayCount(SwapchainSubbufs), SwapchainSubbufs, &ImageBuf), label_Swapchain);
     }
-    VulkanCheckGoto(vkGetSwapchainImagesKHR(Device.Handle, SwapchainHandle, &SwapchainImageCount, Images), label_ImageBuf);
+    VulkanCheckGoto(vkGetSwapchainImagesKHR(DeviceHandle, SwapchainHandle, &SwapchainImageCount, Images), label_ImageBuf);
 
     uint32_t CreatedImageViewCount;
     for(CreatedImageViewCount = 0; CreatedImageViewCount < SwapchainImageCount; ++CreatedImageViewCount) {
@@ -1361,7 +1370,7 @@ static int VulkanCreateSwapchain(vulkan_surface_device Device, VkExtent2D Extent
             }
         };
 
-        VulkanCheckGoto(vkCreateImageView(Device.Handle, &ImageViewCreateInfo, 0, ImageViews + CreatedImageViewCount), label_ImageViews);
+        VulkanCheckGoto(vkCreateImageView(DeviceHandle, &ImageViewCreateInfo, 0, ImageViews + CreatedImageViewCount), label_ImageViews);
     }
 
     VkSampleCountFlagBits UsedSampleCount = SampleCount;
@@ -1369,7 +1378,7 @@ static int VulkanCreateSwapchain(vulkan_surface_device Device, VkExtent2D Extent
     VkImage DepthImage;
     VkDeviceMemory DepthImageMemory;
     VkImageView DepthImageView;
-    CheckGoto(VulkanCreateExclusiveImageWithMemoryAndView(Device, VK_IMAGE_TYPE_2D, Device.BestDepthFormat, ClampedImageExtent.width, ClampedImageExtent.height, 1,
+    CheckGoto(VulkanCreateExclusiveImageWithMemoryAndView(Device, VK_IMAGE_TYPE_2D, Device->BestDepthFormat, ClampedImageExtent.width, ClampedImageExtent.height, 1,
                                                         UsedSampleCount, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
                                                         VK_IMAGE_VIEW_TYPE_2D, VK_IMAGE_ASPECT_DEPTH_BIT,
                                                         &DepthImage, &DepthImageMemory, &DepthImageView), label_ImageViews);
@@ -1397,7 +1406,7 @@ static int VulkanCreateSwapchain(vulkan_surface_device Device, VkExtent2D Extent
             .layers = 1
         };
 
-        VulkanCheckGoto(vkCreateFramebuffer(Device.Handle, &FramebufferCreateInfo, 0, Framebuffers + CreatedFramebufferCount), label_Framebuffers);
+        VulkanCheckGoto(vkCreateFramebuffer(DeviceHandle, &FramebufferCreateInfo, 0, Framebuffers + CreatedFramebufferCount), label_Framebuffers);
     }
 
     vulkan_swapchain LocalSwapchain = {
@@ -1425,325 +1434,45 @@ static int VulkanCreateSwapchain(vulkan_surface_device Device, VkExtent2D Extent
 
 label_Framebuffers:
     for(uint32_t I = 0; I < CreatedFramebufferCount; ++I) {
-        vkDestroyFramebuffer(Device.Handle, Framebuffers[I], 0);
+        vkDestroyFramebuffer(DeviceHandle, Framebuffers[I], 0);
     }
-    vkDestroyImageView(Device.Handle, ColorImageView, 0);
-    vkFreeMemory(Device.Handle, ColorImageMemory, 0);
-    vkDestroyImage(Device.Handle, ColorImage, 0);
+    vkDestroyImageView(DeviceHandle, ColorImageView, 0);
+    vkFreeMemory(DeviceHandle, ColorImageMemory, 0);
+    vkDestroyImage(DeviceHandle, ColorImage, 0);
 label_DepthImage:
-    vkDestroyImageView(Device.Handle, DepthImageView, 0);
-    vkFreeMemory(Device.Handle, DepthImageMemory, 0);
-    vkDestroyImage(Device.Handle, DepthImage, 0);
+    vkDestroyImageView(DeviceHandle, DepthImageView, 0);
+    vkFreeMemory(DeviceHandle, DepthImageMemory, 0);
+    vkDestroyImage(DeviceHandle, DepthImage, 0);
 label_ImageViews:
     for(uint32_t I = 0; I < CreatedImageViewCount; ++I) {
-        vkDestroyImageView(Device.Handle, ImageViews[I], 0);
+        vkDestroyImageView(DeviceHandle, ImageViews[I], 0);
     }
 label_ImageBuf:
     free(ImageBuf);
 label_Swapchain:
-    vkDestroySwapchainKHR(Device.Handle, SwapchainHandle, 0);
-label_Error:
-    return 1;
-}
-
-static void VulkanDestroyDefaultGraphicsPipeline(vulkan_surface_device Device, vulkan_graphics_pipeline_info PipelineInfo) {
-    vkDestroyPipeline(Device.Handle, PipelineInfo.Pipeline, 0);
-    vkDestroyRenderPass(Device.Handle, PipelineInfo.RenderPass, 0);
-    vkDestroyPipelineLayout(Device.Handle, PipelineInfo.Layout, 0);
-    
-}
-
-// MARK: Graphics Pipeline
-static int VulkanCreateDefaultGraphicsPipeline(vulkan_surface_device Device, VkShaderModule ModuleVS, VkShaderModule ModuleFS, VkExtent2D InitialExtent, VkFormat SwapchainFormat, VkSampleCountFlagBits SampleCount, VkPipelineVertexInputStateCreateInfo PipelineVertexInputStateCreateInfo, VkDescriptorSetLayout *DescriptorSetLayouts, uint32_t DescriptorSetLayoutCount, VkPushConstantRange PushConstantRange, vulkan_graphics_pipeline_info *PipelineInfo) {
-    VkPipelineShaderStageCreateInfo PipelineStageCreateInfos[] = {
-        {
-            .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
-            .pNext = 0,
-            .flags = 0,
-            .stage = VK_SHADER_STAGE_VERTEX_BIT,
-            .module = ModuleVS,
-            .pName = "main", // NOTE(blackedout): Entry point
-            .pSpecializationInfo = 0
-        },
-        {
-            .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
-            .pNext = 0,
-            .flags = 0,
-            .stage = VK_SHADER_STAGE_FRAGMENT_BIT,
-            .module = ModuleFS,
-            .pName = "main",
-            .pSpecializationInfo = 0
-        }
-    };
-
-    VkDynamicState VulkanDynamicStates[] = {
-        VK_DYNAMIC_STATE_VIEWPORT,
-        VK_DYNAMIC_STATE_SCISSOR,
-    };
-
-    VkPipelineDynamicStateCreateInfo PipelineDynamicStateCreateInfo = {
-        .sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
-        .pNext = 0,
-        .flags = 0,
-        .dynamicStateCount = ArrayCount(VulkanDynamicStates),
-        .pDynamicStates = VulkanDynamicStates
-    };
-
-    VkPipelineInputAssemblyStateCreateInfo PipelineInputAssemblyStateCreateInfo = {
-         .sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
-        .pNext = 0,
-        .flags = 0,
-        .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
-        .primitiveRestartEnable = VK_FALSE,
-    };
-
-    VkViewport Viewport = {
-        .x = 0.0f,
-        .y = 0.0f,
-        .width = (float)InitialExtent.width,
-        .height = (float)InitialExtent.height,
-        .minDepth = 0.0f,
-        .maxDepth = 1.0f
-    };
-
-    VkRect2D Scissors = {
-        .offset = { 0, 0 },
-        .extent = InitialExtent,
-    };
-
-    VkPipelineViewportStateCreateInfo PipelineViewportStateCreateInfo = {
-        .sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
-        .pNext = 0,
-        .flags = 0,
-        .viewportCount = 1,
-        .pViewports = &Viewport,
-        .scissorCount = 1,
-        .pScissors = &Scissors,
-    };
-
-    VkPipelineRasterizationStateCreateInfo PipelineRasterizationStateCreateInfo = {
-        .sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
-        .pNext = 0,
-        .flags = 0,
-        .depthClampEnable = VK_FALSE,
-        .rasterizerDiscardEnable = VK_FALSE,
-        .polygonMode = VK_POLYGON_MODE_FILL,
-        .cullMode = VK_CULL_MODE_BACK_BIT,
-        .frontFace = VK_FRONT_FACE_CLOCKWISE,
-        .depthBiasEnable = VK_FALSE,
-        .depthBiasConstantFactor = 0.0f,
-        .depthBiasClamp = 0.0f,
-        .depthBiasSlopeFactor = 0.0f,
-        .lineWidth = 1.0f,
-    };
-
-    VkPipelineMultisampleStateCreateInfo PipelineMultiSampleStateCreateInfo = {
-        .sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
-        .pNext = 0,
-        .flags = 0,
-        .rasterizationSamples = SampleCount,
-        .sampleShadingEnable = VK_FALSE, // TODO(blackedout): Enable this?
-        .minSampleShading = 1.0f,
-        .pSampleMask = 0,
-        .alphaToCoverageEnable = VK_FALSE,
-        .alphaToOneEnable = VK_FALSE
-    };
-
-    VkPipelineDepthStencilStateCreateInfo PipelineDepthStencilStateCreateInfo = {
-        .sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
-        .pNext = 0,
-        .flags = 0,
-        .depthTestEnable = VK_TRUE,
-        .depthWriteEnable = VK_TRUE,
-        .depthCompareOp = VK_COMPARE_OP_LESS,
-        .depthBoundsTestEnable = VK_FALSE,
-        .stencilTestEnable = VK_FALSE,
-        .front = {0},
-        .back = {0},
-        .minDepthBounds = 0.0f,
-        .maxDepthBounds = 1.0f,
-    };
-
-    VkPipelineColorBlendAttachmentState PipelineColorBlendAttachmentState = {
-        .blendEnable = VK_FALSE,
-        .srcColorBlendFactor = VK_BLEND_FACTOR_ZERO,
-        .dstColorBlendFactor = VK_BLEND_FACTOR_ZERO,
-        .colorBlendOp = VK_BLEND_OP_ADD,
-        .srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO,
-        .dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO,
-        .alphaBlendOp = VK_BLEND_OP_ADD,
-        .colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT,
-    };
-
-    VkPipelineColorBlendStateCreateInfo PipelineColorBlendStateCreateInfo = {
-        .sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
-        .pNext = 0,
-        .flags = 0,
-        .logicOpEnable = VK_FALSE,
-        .logicOp = VK_LOGIC_OP_CLEAR,
-        .attachmentCount = 1,
-        .pAttachments = &PipelineColorBlendAttachmentState,
-        .blendConstants = {0.0f, 0.0f, 0.0f, 0.0f}
-    };
-
-    VkPipelineLayout LocalPipelineLayout;
-    VkPipelineLayoutCreateInfo PipelineLayoutCreateInfo = {
-        .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
-        .pNext = 0,
-        .flags = 0,
-        .setLayoutCount = DescriptorSetLayoutCount,
-        .pSetLayouts = DescriptorSetLayouts,
-        .pushConstantRangeCount = 1,
-        .pPushConstantRanges = &PushConstantRange,
-    };
-    VulkanCheckGoto(vkCreatePipelineLayout(Device.Handle, &PipelineLayoutCreateInfo, 0, &LocalPipelineLayout), label_Error);
-
-    VkAttachmentDescription AttachmentDescriptions[] = {
-        {
-            .flags = 0,
-            .format = SwapchainFormat,
-            .samples = SampleCount,
-            .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
-            .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
-            .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
-            .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
-            .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-            .finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL //,
-        },
-        {
-            .flags = 0,
-            .format = Device.BestDepthFormat,
-            .samples = SampleCount,
-            .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
-            .storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
-            .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
-            .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
-            .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-            .finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
-        },
-        {
-            .flags = 0,
-            .format = SwapchainFormat,
-            .samples = VK_SAMPLE_COUNT_1_BIT,
-            .loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
-            .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
-            .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
-            .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
-            .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-            .finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
-        },
-    };
-
-    VkAttachmentReference AttachmentRefs[] = {
-        {
-            .attachment = 0, // NOTE(blackedout): Fragment shader layout index
-            .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-        },
-        {
-            .attachment = 1,
-            .layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
-        },
-        {
-            .attachment = 2,
-            .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-        }
-    };
-
-    VkSubpassDescription SubpassDescription = {
-        .flags = 0,
-        .pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS,
-        .inputAttachmentCount = 0,
-        .pInputAttachments = 0,
-        .colorAttachmentCount = 1,
-        .pColorAttachments = AttachmentRefs + 0,
-        .pResolveAttachments = AttachmentRefs + 2,
-        .pDepthStencilAttachment = AttachmentRefs + 1, // NOTE(blackedout): No count because max one possible
-        .preserveAttachmentCount = 0,
-        .pPreserveAttachments = 0,
-    };
-
-    VkSubpassDependency RenderSubpassDependency = {
-        .srcSubpass = VK_SUBPASS_EXTERNAL,
-        .dstSubpass = 0, // NOTE(blackedout): First subpass index
-        .srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
-        .dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
-        .srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
-        .dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
-        .dependencyFlags = 0,
-    };
-
-    VkRenderPassCreateInfo RenderPassCreateInfo = {
-        .sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
-        .pNext = 0,
-        .flags = 0,
-        .attachmentCount = ArrayCount(AttachmentDescriptions),
-        .pAttachments = AttachmentDescriptions,
-        .subpassCount = 1,
-        .pSubpasses = &SubpassDescription,
-        .dependencyCount = 1,
-        .pDependencies = &RenderSubpassDependency,
-    };
-    VkRenderPass LocalRenderPass;
-    VulkanCheckGoto(vkCreateRenderPass(Device.Handle, &RenderPassCreateInfo, 0, &LocalRenderPass), label_PipelineLayout);
-
-    VkGraphicsPipelineCreateInfo GraphicsPipelineCreateInfo = {
-        .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
-        .pNext = 0,
-        .flags = 0,
-        .stageCount = ArrayCount(PipelineStageCreateInfos),
-        .pStages = PipelineStageCreateInfos,
-        .pVertexInputState = &PipelineVertexInputStateCreateInfo,
-        .pInputAssemblyState = &PipelineInputAssemblyStateCreateInfo,
-        .pTessellationState = 0,
-        .pViewportState = &PipelineViewportStateCreateInfo,
-        .pRasterizationState = &PipelineRasterizationStateCreateInfo,
-        .pMultisampleState = &PipelineMultiSampleStateCreateInfo,
-        .pDepthStencilState = &PipelineDepthStencilStateCreateInfo,
-        .pColorBlendState = &PipelineColorBlendStateCreateInfo,
-        .pDynamicState = &PipelineDynamicStateCreateInfo,
-        .layout = LocalPipelineLayout,
-        .renderPass = LocalRenderPass,
-        .subpass = 0,
-        .basePipelineHandle = VULKAN_NULL_HANDLE,
-        .basePipelineIndex = -1
-    };
-
-    VkPipeline LocalPipeline;
-    VulkanCheckGoto(vkCreateGraphicsPipelines(Device.Handle, VULKAN_NULL_HANDLE, 1, &GraphicsPipelineCreateInfo, 0, &LocalPipeline), label_RenderPass);
-
-    vulkan_graphics_pipeline_info LocalPipelineInfo = {
-        .Layout = LocalPipelineLayout,
-        .RenderPass = LocalRenderPass,
-        .Pipeline = LocalPipeline
-    };
-    *PipelineInfo = LocalPipelineInfo;
-
-    return 0;
-
-label_RenderPass:
-    vkDestroyRenderPass(Device.Handle, LocalRenderPass, 0);
-label_PipelineLayout:
-    vkDestroyPipelineLayout(Device.Handle, LocalPipelineLayout, 0);
+    vkDestroySwapchainKHR(DeviceHandle, SwapchainHandle, 0);
 label_Error:
     return 1;
 }
 
 // MARK: Swapch. Handler
-static void VulkanDestroySwapchainHandler(vulkan_surface_device Device, vulkan_swapchain_handler *SwapchainHandler) {
+static void VulkanDestroySwapchainHandler(vulkan_surface_device *Device, vulkan_swapchain_handler *SwapchainHandler) {
+    VkDevice DeviceHandle = Device->Handle;
     vulkan_swapchain_handler Handler = *SwapchainHandler;
     for(uint32_t I = 0; I < Handler.SwapchainBufIndices.Count; ++I) {
         uint32_t CircularIndex = IndicesCircularGet(&Handler.SwapchainBufIndices, I);
-        VulkanDestroySwapchain(Device, Handler.Swapchains[CircularIndex]);
+        VulkanDestroySwapchain(Device, Handler.Swapchains + CircularIndex);
     }
 
     for(uint32_t I = 0; I < MAX_ACQUIRED_IMAGE_COUNT; ++I) {
-        vkDestroySemaphore(Device.Handle, SwapchainHandler->ImageAvailableSemaphores[I], 0);
-        vkDestroySemaphore(Device.Handle, SwapchainHandler->RenderFinishedSemaphores[I], 0);
-        vkDestroyFence(Device.Handle, SwapchainHandler->InFlightFences[I], 0);
+        vkDestroySemaphore(DeviceHandle, SwapchainHandler->ImageAvailableSemaphores[I], 0);
+        vkDestroySemaphore(DeviceHandle, SwapchainHandler->RenderFinishedSemaphores[I], 0);
+        vkDestroyFence(DeviceHandle, SwapchainHandler->InFlightFences[I], 0);
     }
 }
 
-static int VulkanCreateSwapchainAndHandler(vulkan_surface_device Device, VkExtent2D InitialExtent, VkSampleCountFlagBits SampleCount, VkRenderPass RenderPass, vulkan_swapchain_handler *SwapchainHandler) {
+static int VulkanCreateSwapchainAndHandler(vulkan_surface_device *Device, VkExtent2D InitialExtent, VkSampleCountFlagBits SampleCount, VkRenderPass RenderPass, vulkan_swapchain_handler *SwapchainHandler) {
+    VkDevice DeviceHandle = Device->Handle;
     vulkan_swapchain Swapchain;
     CheckGoto(VulkanCreateSwapchain(Device, InitialExtent, SampleCount, RenderPass, 0, &Swapchain), label_Error);
 
@@ -1786,11 +1515,11 @@ static int VulkanCreateSwapchainAndHandler(vulkan_surface_device Device, VkExten
     VkFence Fences[MAX_ACQUIRED_IMAGE_COUNT];
     
     for(SemaphoresCount = 0; SemaphoresCount < ArrayCount(Semaphores); ++SemaphoresCount) {
-        VulkanCheckGoto(vkCreateSemaphore(Device.Handle, &UnsignaledSemaphoreCreateInfo, 0, Semaphores + SemaphoresCount), label_Semaphores);
+        VulkanCheckGoto(vkCreateSemaphore(DeviceHandle, &UnsignaledSemaphoreCreateInfo, 0, Semaphores + SemaphoresCount), label_Semaphores);
     }
     
     for(FencesCount = 0; FencesCount < ArrayCount(Fences); ++FencesCount) {
-        VulkanCheckGoto(vkCreateFence(Device.Handle, &UnsignaledFenceCreateInfo, 0, Fences + FencesCount), label_Fences);
+        VulkanCheckGoto(vkCreateFence(DeviceHandle, &UnsignaledFenceCreateInfo, 0, Fences + FencesCount), label_Fences);
     }
 
     memcpy(Handler.ImageAvailableSemaphores, Semaphores, MAX_ACQUIRED_IMAGE_COUNT*sizeof(*Semaphores));
@@ -1803,18 +1532,19 @@ static int VulkanCreateSwapchainAndHandler(vulkan_surface_device Device, VkExten
 
 label_Fences:
     for(uint32_t I = 0; I < FencesCount; ++I) {
-        vkDestroyFence(Device.Handle, Fences[I], 0);
+        vkDestroyFence(DeviceHandle, Fences[I], 0);
     }
 label_Semaphores:
     for(uint32_t I = 0; I < SemaphoresCount; ++I) {
-        vkDestroySemaphore(Device.Handle, Semaphores[I], 0);
+        vkDestroySemaphore(DeviceHandle, Semaphores[I], 0);
     }
-    VulkanDestroySwapchain(Device, Swapchain);
+    VulkanDestroySwapchain(Device, &Swapchain);
 label_Error:
     return 1;
 }
 
-static int VulkanAcquireNextImage(vulkan_surface_device Device, vulkan_swapchain_handler *SwapchainHandler, VkExtent2D FramebufferExtent, vulkan_acquired_image *AcquiredImage) {
+static int VulkanAcquireNextImage(vulkan_surface_device *Device, vulkan_swapchain_handler *SwapchainHandler, VkExtent2D FramebufferExtent, vulkan_acquired_image *AcquiredImage) {
+    VkDevice DeviceHandle = Device->Handle;
     vulkan_swapchain_handler Handler = *SwapchainHandler;
 
     // NOTE(blackedout):
@@ -1828,7 +1558,7 @@ static int VulkanAcquireNextImage(vulkan_surface_device Device, vulkan_swapchain
         SwapchainIndex = IndicesCircularHead(&Handler.SwapchainBufIndices);
         Swapchain = Handler.Swapchains[SwapchainIndex];
         VkSemaphore ImageAvailableSemaphore = Handler.ImageAvailableSemaphores[Handler.AcquiredImageDataIndices.Next];
-        VkResult AcquireResult = vkAcquireNextImageKHR(Device.Handle, Swapchain.Handle, UINT64_MAX, ImageAvailableSemaphore, VULKAN_NULL_HANDLE, &SwapchainImageIndex);
+        VkResult AcquireResult = vkAcquireNextImageKHR(DeviceHandle, Swapchain.Handle, UINT64_MAX, ImageAvailableSemaphore, VULKAN_NULL_HANDLE, &SwapchainImageIndex);
         if(AcquireResult == VK_ERROR_OUT_OF_DATE_KHR) {
             VkFence InFlightFences[ArrayCount(Handler.InFlightFences)];
             for(uint32_t I = 0; I < Handler.AcquiredImageDataIndices.Count; ++I) {
@@ -1836,14 +1566,14 @@ static int VulkanAcquireNextImage(vulkan_surface_device Device, vulkan_swapchain
                 InFlightFences[I] = Handler.InFlightFences[CircularIndex];
             }
 
-            vkWaitForFences(Device.Handle, Handler.AcquiredImageDataIndices.Count, InFlightFences, VK_TRUE, UINT64_MAX);
+            vkWaitForFences(DeviceHandle, Handler.AcquiredImageDataIndices.Count, InFlightFences, VK_TRUE, UINT64_MAX);
             Handler.AcquiredImageDataIndices.Next = 0;
             Handler.AcquiredImageDataIndices.Count = 0;
 
             CheckGoto(VulkanCreateSwapchain(Device, FramebufferExtent, Handler.SampleCount, Handler.RenderPass, &Swapchain, &Swapchain), label_Error);
             for(uint32_t I = 0; I < Handler.SwapchainBufIndices.Count; ++I) {
                 uint32_t CircularIndex = IndicesCircularGet(&Handler.SwapchainBufIndices, I);
-                VulkanDestroySwapchain(Device, Handler.Swapchains[CircularIndex]);
+                VulkanDestroySwapchain(Device, Handler.Swapchains + CircularIndex);
             }
             Handler.SwapchainBufIndices.Next = 1;
             Handler.SwapchainBufIndices.Count = 1;
@@ -1875,13 +1605,16 @@ static int VulkanAcquireNextImage(vulkan_surface_device Device, vulkan_swapchain
     *AcquiredImage = LocalAcquiredImage;
     *SwapchainHandler = Handler;
 
+    //printf("current (%d, %d), acquired (%d, %d)\n", Context.FramebufferWidth, Context.FramebufferHeight, AcquiredImage.Extent.width, AcquiredImage.Extent.height);
+
     return 0;
 
 label_Error:
     return 1;
 }
 
-static int VulkanSubmitFinalAndPresent(vulkan_surface_device Device, vulkan_swapchain_handler *SwapchainHandler, VkQueue GraphicsQueue, VkCommandBuffer GraphicsCommandBuffer, VkExtent2D FramebufferExtent) {
+static int VulkanSubmitFinalAndPresent(vulkan_surface_device *Device, vulkan_swapchain_handler *SwapchainHandler, VkQueue GraphicsQueue, VkCommandBuffer GraphicsCommandBuffer, VkExtent2D FramebufferExtent) {
+    VkDevice DeviceHandle = Device->Handle;
     vulkan_swapchain_handler Handler = *SwapchainHandler;
 
     uint32_t SwapchainIndex = Handler.SwapchainIndexLastAcquired;
@@ -1931,8 +1664,8 @@ static int VulkanSubmitFinalAndPresent(vulkan_surface_device Device, vulkan_swap
 
     // NOTE(blackedout): Remove acquired image from list
     uint32_t AcquiredImageDataBaseIndex = IndicesCircularTake(&Handler.AcquiredImageDataIndices);
-    VulkanCheckGoto(vkWaitForFences(Device.Handle, 1, &Handler.InFlightFences[AcquiredImageDataBaseIndex], VK_TRUE, UINT64_MAX), label_Error);
-    vkResetFences(Device.Handle, 1, &Handler.InFlightFences[AcquiredImageDataBaseIndex]);
+    VulkanCheckGoto(vkWaitForFences(DeviceHandle, 1, &Handler.InFlightFences[AcquiredImageDataBaseIndex], VK_TRUE, UINT64_MAX), label_Error);
+    vkResetFences(DeviceHandle, 1, &Handler.InFlightFences[AcquiredImageDataBaseIndex]);
     Handler.AcquiredSwapchainImageIndices[AcquiredImageDataBaseIndex] = 0;
     Handler.AcquiredSwapchainIndices[AcquiredImageDataBaseIndex] = 0;
 
@@ -1941,7 +1674,7 @@ static int VulkanSubmitFinalAndPresent(vulkan_surface_device Device, vulkan_swap
     --Handler.Swapchains[SwapchainsBaseIndex].AcquiredImageCount;
     if(Handler.SwapchainBufIndices.Count > 1 && Handler.Swapchains[SwapchainsBaseIndex].AcquiredImageCount == 0) {
         printf("Destructing swapchain %d.\n", SwapchainsBaseIndex);
-        VulkanDestroySwapchain(Device, Handler.Swapchains[SwapchainsBaseIndex]);
+        VulkanDestroySwapchain(Device, Handler.Swapchains + SwapchainsBaseIndex);
         
         IndicesCircularTake(&Handler.SwapchainBufIndices);
         memset(&Handler.Swapchains[SwapchainsBaseIndex], 0, sizeof(*Handler.Swapchains));
