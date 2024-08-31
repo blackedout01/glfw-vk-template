@@ -192,7 +192,7 @@ static void ProgramSetdown(context *Context, vulkan_surface_device *Device) {
         DestroyShaders(Device, &Context->Shaders);
     }
     if(Context->ImagesInitialized) {
-        VulkanDestroyStaticBuffersAndImages(Device, Context->StaticBuffers, Context->Images, STATIC_IMAGE_COUNT);
+        VulkanDestroyStaticBuffersAndImages(Device, &Context->StaticBuffers, Context->Images, STATIC_IMAGE_COUNT);
     }
     if(Context->GraphicsCommandPool) {
         vkDestroyCommandPool(DeviceHandle, Context->GraphicsCommandPool, 0);
@@ -207,95 +207,97 @@ static int ProgramSetup(context *Context, vulkan_surface_device *Device, VkComma
         .CamZoom = 1.0f,
     };
 
-    // NOTE(blackedout): Create command pools, buffer and get queue
-    VkCommandPoolCreateInfo GraphicsCommandPoolCreateInfo = {
-        .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
-        .pNext = 0,
-        .flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
-        .queueFamilyIndex = Device->GraphicsQueueFamilyIndex
-    };
-    VulkanCheckGoto(vkCreateCommandPool(DeviceHandle, &GraphicsCommandPoolCreateInfo, 0, &LocalContext.GraphicsCommandPool), label_Error);
+    {
+        // NOTE(blackedout): Create command pools, buffer and get queue
+        VkCommandPoolCreateInfo GraphicsCommandPoolCreateInfo = {
+            .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
+            .pNext = 0,
+            .flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
+            .queueFamilyIndex = Device->GraphicsQueueFamilyIndex
+        };
+        VulkanCheckGoto(vkCreateCommandPool(DeviceHandle, &GraphicsCommandPoolCreateInfo, 0, &LocalContext.GraphicsCommandPool), label_Error);
 
-    VkCommandBufferAllocateInfo GraphicsCommandBufferAllocateInfo = {
-        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
-        .pNext = 0,
-        .commandPool = LocalContext.GraphicsCommandPool,
-        .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
-        .commandBufferCount = 1,
-    };
-    VulkanCheckGoto(vkAllocateCommandBuffers(DeviceHandle, &GraphicsCommandBufferAllocateInfo, &LocalContext.GraphicsCommandBuffer), label_Error);
+        VkCommandBufferAllocateInfo GraphicsCommandBufferAllocateInfo = {
+            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+            .pNext = 0,
+            .commandPool = LocalContext.GraphicsCommandPool,
+            .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+            .commandBufferCount = 1,
+        };
+        VulkanCheckGoto(vkAllocateCommandBuffers(DeviceHandle, &GraphicsCommandBufferAllocateInfo, &LocalContext.GraphicsCommandBuffer), label_Error);
 
-    vkGetDeviceQueue(DeviceHandle, Device->GraphicsQueueFamilyIndex, 0, &LocalContext.GraphicsQueue);
+        vkGetDeviceQueue(DeviceHandle, Device->GraphicsQueueFamilyIndex, 0, &LocalContext.GraphicsQueue);
 
-    vulkan_mesh_subbuf MeshSubbufs[] = {
-        {
-            .Vertices = { .Source = PlaneVertices, .ByteCount = sizeof(PlaneVertices), .OffsetPointer = &LocalContext.PlaneVerticesByteOffset },
-            .Indices = { .Source = PlaneIndices, .ByteCount = sizeof(PlaneIndices), .OffsetPointer = &LocalContext.PlaneIndicesByteOffset }
-        },
-        {
-            .Vertices = { .Source = CubeVertices, .ByteCount = sizeof(CubeVertices), .OffsetPointer = &LocalContext.CubeVerticesByteOffset },
-            .Indices = { .Source = CubeIndices, .ByteCount = sizeof(CubeIndices), .OffsetPointer = &LocalContext.CubeIndicesByteOffset }
-        }
-    };
+        vulkan_mesh_subbuf MeshSubbufs[] = {
+            {
+                .Vertices = { .Source = PlaneVertices, .ByteCount = sizeof(PlaneVertices), .OffsetPointer = &LocalContext.PlaneVerticesByteOffset },
+                .Indices = { .Source = PlaneIndices, .ByteCount = sizeof(PlaneIndices), .OffsetPointer = &LocalContext.PlaneIndicesByteOffset }
+            },
+            {
+                .Vertices = { .Source = CubeVertices, .ByteCount = sizeof(CubeVertices), .OffsetPointer = &LocalContext.CubeVerticesByteOffset },
+                .Indices = { .Source = CubeIndices, .ByteCount = sizeof(CubeIndices), .OffsetPointer = &LocalContext.CubeIndicesByteOffset }
+            }
+        };
 
-    uint8_t TileImageBytes[] = {
-        0xff, 0xff, 0xff, 0xff,
-        0xf9, 0xf9, 0xfd, 0xff,
-        0xf9, 0xf9, 0xfd, 0xff,
-        0xff, 0xff, 0xff, 0xff,
-    };
-    uint8_t ColorImageBytes[] = {
-        0xff, 0x20, 0x20, 0xff,
-        0x20, 0xff, 0x20, 0xff,
-        0x20, 0x20, 0xff, 0xff,
-    };
-    vulkan_image_description ImageDescriptions[STATIC_IMAGE_COUNT] = {
-        [STATIC_IMAGE_COLOR] =
-        { .Type = VK_IMAGE_TYPE_2D, .ViewType = VK_IMAGE_VIEW_TYPE_2D, .Format = VK_FORMAT_R8G8B8A8_SRGB, .Width = 2, .Height = 2, .Depth = 1, .Source = TileImageBytes, .ByteCount = sizeof(TileImageBytes) },
-        [STATIC_IMAGE_TILE] =
-        { .Type = VK_IMAGE_TYPE_2D, .ViewType = VK_IMAGE_VIEW_TYPE_2D, .Format = VK_FORMAT_R8G8B8A8_SRGB, .Width = ArrayCount(ColorImageBytes)/4, .Height = 1, .Depth = 1, .Source = ColorImageBytes, .ByteCount = sizeof(ColorImageBytes) },
-    };
-    CheckGoto(VulkanCreateStaticBuffersAndImages(Device, MeshSubbufs, ArrayCount(MeshSubbufs), ImageDescriptions, ArrayCount(LocalContext.Images), LocalContext.GraphicsCommandPool, LocalContext.GraphicsQueue, &LocalContext.StaticBuffers, LocalContext.Images), label_Error);
-    LocalContext.ImagesInitialized = 1;
+        uint8_t TileImageBytes[] = {
+            0xff, 0xff, 0xff, 0xff,
+            0xf9, 0xf9, 0xfd, 0xff,
+            0xf9, 0xf9, 0xfd, 0xff,
+            0xff, 0xff, 0xff, 0xff,
+        };
+        uint8_t ColorImageBytes[] = {
+            0xff, 0x20, 0x20, 0xff,
+            0x20, 0xff, 0x20, 0xff,
+            0x20, 0x20, 0xff, 0xff,
+        };
+        vulkan_image_description ImageDescriptions[STATIC_IMAGE_COUNT] = {
+            [STATIC_IMAGE_COLOR] =
+            { .Type = VK_IMAGE_TYPE_2D, .ViewType = VK_IMAGE_VIEW_TYPE_2D, .Format = VK_FORMAT_R8G8B8A8_SRGB, .Width = 2, .Height = 2, .Depth = 1, .Source = TileImageBytes, .ByteCount = sizeof(TileImageBytes) },
+            [STATIC_IMAGE_TILE] =
+            { .Type = VK_IMAGE_TYPE_2D, .ViewType = VK_IMAGE_VIEW_TYPE_2D, .Format = VK_FORMAT_R8G8B8A8_SRGB, .Width = ArrayCount(ColorImageBytes)/4, .Height = 1, .Depth = 1, .Source = ColorImageBytes, .ByteCount = sizeof(ColorImageBytes) },
+        };
+        CheckGoto(VulkanCreateStaticBuffersAndImages(Device, MeshSubbufs, ArrayCount(MeshSubbufs), ImageDescriptions, ArrayCount(LocalContext.Images), LocalContext.GraphicsCommandPool, LocalContext.GraphicsQueue, &LocalContext.StaticBuffers, LocalContext.Images), label_Error);
+        LocalContext.ImagesInitialized = 1;
 
-    CheckGoto(LoadShaders(Device, &LocalContext.Shaders, LocalContext.Images), label_Error);
+        CheckGoto(LoadShaders(Device, &LocalContext.Shaders, LocalContext.Images), label_Error);
 
-    VkVertexInputBindingDescription VertexInputBindingDescription = {
-        .binding = 0,
-        .stride = sizeof(vertex),
-        .inputRate = VK_VERTEX_INPUT_RATE_VERTEX,
-    };
+        VkVertexInputBindingDescription VertexInputBindingDescription = {
+            .binding = 0,
+            .stride = sizeof(vertex),
+            .inputRate = VK_VERTEX_INPUT_RATE_VERTEX,
+        };
 
-    VkVertexInputAttributeDescription VertexAttributeDescriptions[] = {
-        { .location = 0, .binding = 0, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = offsetof(vertex, Position) },
-        { .location = 1, .binding = 0, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = offsetof(vertex, Normal) },
-        { .location = 2, .binding = 0, .format = VK_FORMAT_R32G32_SFLOAT, .offset = offsetof(vertex, TexCoord) },
-    };
+        VkVertexInputAttributeDescription VertexAttributeDescriptions[] = {
+            { .location = 0, .binding = 0, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = offsetof(vertex, Position) },
+            { .location = 1, .binding = 0, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = offsetof(vertex, Normal) },
+            { .location = 2, .binding = 0, .format = VK_FORMAT_R32G32_SFLOAT, .offset = offsetof(vertex, TexCoord) },
+        };
 
-    VkPipelineVertexInputStateCreateInfo PipelineVertexInputStateCreateInfo = {
-        .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
-        .pNext = 0,
-        .flags = 0,
-        .vertexBindingDescriptionCount = 1,
-        .pVertexBindingDescriptions = &VertexInputBindingDescription,
-        .vertexAttributeDescriptionCount = ArrayCount(VertexAttributeDescriptions),
-        .pVertexAttributeDescriptions = VertexAttributeDescriptions,
-    };
+        VkPipelineVertexInputStateCreateInfo PipelineVertexInputStateCreateInfo = {
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+            .pNext = 0,
+            .flags = 0,
+            .vertexBindingDescriptionCount = 1,
+            .pVertexBindingDescriptions = &VertexInputBindingDescription,
+            .vertexAttributeDescriptionCount = ArrayCount(VertexAttributeDescriptions),
+            .pVertexAttributeDescriptions = VertexAttributeDescriptions,
+        };
 
-    VkPushConstantRange PushConstantRange = {
-        .stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-        .offset = 0,
-        .size = sizeof(default_push_constants),
-    };
+        VkPushConstantRange PushConstantRange = {
+            .stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+            .offset = 0,
+            .size = sizeof(default_push_constants),
+        };
 
-    VkSampleCountFlagBits LocalSampleCount = Min(Device->MaxSampleCount, VK_SAMPLE_COUNT_4_BIT);
-    CheckGoto(VulkanCreateDefaultGraphicsPipeline(Device, LocalContext.Shaders.Default.Vert, LocalContext.Shaders.Default.Frag, Device->InitialExtent, Device->InitialSurfaceFormat.format, LocalSampleCount, PipelineVertexInputStateCreateInfo, LocalContext.Shaders.DescriptorSetLayouts, ArrayCount(LocalContext.Shaders.DescriptorSetLayouts), PushConstantRange, &LocalContext.GraphicsPipelineLayout, &LocalContext.RenderPass, &LocalContext.GraphicsPipeline), label_Error);
+        VkSampleCountFlagBits LocalSampleCount = Min(Device->MaxSampleCount, VK_SAMPLE_COUNT_4_BIT);
+        CheckGoto(VulkanCreateDefaultGraphicsPipeline(Device, LocalContext.Shaders.Default.Vert, LocalContext.Shaders.Default.Frag, Device->InitialExtent, Device->InitialSurfaceFormat.format, LocalSampleCount, PipelineVertexInputStateCreateInfo, LocalContext.Shaders.DescriptorSetLayouts, ArrayCount(LocalContext.Shaders.DescriptorSetLayouts), PushConstantRange, &LocalContext.GraphicsPipelineLayout, &LocalContext.RenderPass, &LocalContext.GraphicsPipeline), label_Error);
 
-    *Context = LocalContext;
-    *GraphicsCommandBuffer = LocalContext.GraphicsCommandBuffer;
-    *GraphicsQueue = LocalContext.GraphicsQueue;
-    *RenderPass = LocalContext.RenderPass;
-    *SampleCount = LocalSampleCount;
+        *Context = LocalContext;
+        *GraphicsCommandBuffer = LocalContext.GraphicsCommandBuffer;
+        *GraphicsQueue = LocalContext.GraphicsQueue;
+        *RenderPass = LocalContext.RenderPass;
+        *SampleCount = LocalSampleCount;
+    }
 
     return 0;
     
@@ -310,123 +312,125 @@ static int ProgramUpdate(context *Context, vulkan_surface_device *Device, double
 }
 
 static int ProgramRender(context *Context, vulkan_surface_device *Device, vulkan_acquired_image AcquiredImage) {
-    VulkanCheckGoto(vkResetCommandBuffer(Context->GraphicsCommandBuffer, 0), label_Error);
-    int A = 0;
-    VkRect2D RenderArea = {
-        .offset = { 0, 0 },
-        .extent = AcquiredImage.Extent
-    };
-    VkClearValue RenderClearValues[] = {
-        {
-            //.color = { .float32 = { (A & 1), 0.5f*(A & 2), 0.0f, 1.0f } }
-            .color = { .float32 = { 0.6f, 0.8f, 0.99f - (0.1f*A), 1.0f } }
-            //.color = { .float32 = { 0.0f, 0.0f, 0.0f, 1.0f } }
-        },
-        { .depthStencil = { .depth = 1.0f, .stencil = 0 } }
-    };
-    //++A;
-    if(A >= 4) A = 0;
+    {
+        VulkanCheckGoto(vkResetCommandBuffer(Context->GraphicsCommandBuffer, 0), label_Error);
+        int A = 0;
+        VkRect2D RenderArea = {
+            .offset = { 0, 0 },
+            .extent = AcquiredImage.Extent
+        };
+        VkClearValue RenderClearValues[] = {
+            {
+                //.color = { .float32 = { (A & 1), 0.5f*(A & 2), 0.0f, 1.0f } }
+                .color = { .float32 = { 0.6f, 0.8f, 0.99f - (0.1f*A), 1.0f } }
+                //.color = { .float32 = { 0.0f, 0.0f, 0.0f, 1.0f } }
+            },
+            { .depthStencil = { .depth = 1.0f, .stencil = 0 } }
+        };
+        //++A;
+        if(A >= 4) A = 0;
 
-    VkCommandBufferBeginInfo GraphicsCommandBufferBeginInfo = {
-        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
-        .pNext = 0,
-        .flags = 0,
-        .pInheritanceInfo = 0
-    };
+        VkCommandBufferBeginInfo GraphicsCommandBufferBeginInfo = {
+            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+            .pNext = 0,
+            .flags = 0,
+            .pInheritanceInfo = 0
+        };
 
-    VulkanCheckGoto(vkBeginCommandBuffer(Context->GraphicsCommandBuffer, &GraphicsCommandBufferBeginInfo), label_Error);
-    
-    VkRenderPassBeginInfo RenderPassBeginInfo = {
-        .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
-        .pNext = 0,
-        .renderPass = Context->RenderPass,
-        .framebuffer = AcquiredImage.Framebuffer,
-        .renderArea = RenderArea,
-        .clearValueCount = ArrayCount(RenderClearValues),
-        .pClearValues = RenderClearValues // NOTE(blackedout): For VK_ATTACHMENT_LOAD_OP_CLEAR
-    };
+        VulkanCheckGoto(vkBeginCommandBuffer(Context->GraphicsCommandBuffer, &GraphicsCommandBufferBeginInfo), label_Error);
+        
+        VkRenderPassBeginInfo RenderPassBeginInfo = {
+            .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
+            .pNext = 0,
+            .renderPass = Context->RenderPass,
+            .framebuffer = AcquiredImage.Framebuffer,
+            .renderArea = RenderArea,
+            .clearValueCount = ArrayCount(RenderClearValues),
+            .pClearValues = RenderClearValues // NOTE(blackedout): For VK_ATTACHMENT_LOAD_OP_CLEAR
+        };
 
-    VkViewport Viewport = {
-        .x = 0.0f,
-        .y = 0.0f,
-        .width = (float)AcquiredImage.Extent.width,
-        .height = (float)AcquiredImage.Extent.height,
-        .minDepth = 0.0f,
-        .maxDepth = 1.0f
-    };
+        VkViewport Viewport = {
+            .x = 0.0f,
+            .y = 0.0f,
+            .width = (float)AcquiredImage.Extent.width,
+            .height = (float)AcquiredImage.Extent.height,
+            .minDepth = 0.0f,
+            .maxDepth = 1.0f
+        };
 
-    VkRect2D Scissors = {
-        .offset = { 0, 0 },
-        .extent = AcquiredImage.Extent,
-    };
+        VkRect2D Scissors = {
+            .offset = { 0, 0 },
+            .extent = AcquiredImage.Extent,
+        };
 
-    v3 AxisX = {1.0f, 0.0f, 0.0f};
-    v3 AxisY = {0.0f, 1.0f, 0.0f};
-    m4 ViewRotation = MultiplyM4M4(TranslationM4(0.0f, 0.0f, -8.0f/Context->CamZoom), MultiplyM4M4(RotationM4(AxisX, -Context->CamPol), RotationM4(AxisY, -Context->CamAzi)));
-    default_uniform_buffer1 DefaultUniformBuffer1 = {
-        .V = TransposeM4(ViewRotation),
-        .P = TransposeM4(ProjectionPersp(1.1f, Viewport.width/Viewport.height, 0.01f, 1000.0f)),
-        .L = { 0.2f, -1.0f, -0.4f, 0.0f }
-    };
+        v3 AxisX = {1.0f, 0.0f, 0.0f};
+        v3 AxisY = {0.0f, 1.0f, 0.0f};
+        m4 ViewRotation = MultiplyM4M4(TranslationM4(0.0f, 0.0f, -8.0f/Context->CamZoom), MultiplyM4M4(RotationM4(AxisX, -Context->CamPol), RotationM4(AxisY, -Context->CamAzi)));
+        default_uniform_buffer1 DefaultUniformBuffer1 = {
+            .V = TransposeM4(ViewRotation),
+            .P = TransposeM4(ProjectionPersp(1.1f, Viewport.width/Viewport.height, 0.01f, 1000.0f)),
+            .L = { 0.2f, -1.0f, -0.4f, 0.0f }
+        };
 
-    *Context->Shaders.UniformMats[AcquiredImage.DataIndex] = DefaultUniformBuffer1;
-    vkCmdBeginRenderPass(Context->GraphicsCommandBuffer, &RenderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
-    vkCmdBindPipeline(Context->GraphicsCommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, Context->GraphicsPipeline);
-    vkCmdSetViewport(Context->GraphicsCommandBuffer, 0, 1, &Viewport);
-    vkCmdSetScissor(Context->GraphicsCommandBuffer, 0, 1, &Scissors);
+        *Context->Shaders.UniformMats[AcquiredImage.DataIndex] = DefaultUniformBuffer1;
+        vkCmdBeginRenderPass(Context->GraphicsCommandBuffer, &RenderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
+        vkCmdBindPipeline(Context->GraphicsCommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, Context->GraphicsPipeline);
+        vkCmdSetViewport(Context->GraphicsCommandBuffer, 0, 1, &Viewport);
+        vkCmdSetScissor(Context->GraphicsCommandBuffer, 0, 1, &Scissors);
 
-    // Draw plane mesh
-    VkDescriptorSet PlaneSets[] = { Context->Shaders.UniformMatsSets[AcquiredImage.DataIndex], Context->Shaders.DefaultImageTileSet };
-    vkCmdBindDescriptorSets(Context->GraphicsCommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, Context->GraphicsPipelineLayout, 0, ArrayCount(PlaneSets), PlaneSets, 0, 0);
-    float PlaneScale = 16.0f;
-    default_push_constants DefaultPlanePushConstants = {
-        .M = {
-            PlaneScale, 0.0f, 0.0f, 0.0f,
-            0.0f, 1.0f, 0.0f, 0.0f,
-            0.0f, 0.0f, PlaneScale, 0.0f,
-            0.0f, -0.5f, 0.0f, 1.0f
-        },
-        .TexM = {
-            PlaneScale, 0.0f,
-            0.0f, PlaneScale
-        },
-        .TexT  = { 0.0f, 0.0f }
-    };
-    vkCmdBindVertexBuffers(Context->GraphicsCommandBuffer, 0, 1, &Context->StaticBuffers.VertexHandle, &Context->PlaneVerticesByteOffset);
-    vkCmdBindIndexBuffer(Context->GraphicsCommandBuffer, Context->StaticBuffers.IndexHandle, Context->PlaneIndicesByteOffset, VK_INDEX_TYPE_UINT32);
-    vkCmdPushConstants(Context->GraphicsCommandBuffer, Context->GraphicsPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(DefaultPlanePushConstants), &DefaultPlanePushConstants);
-    vkCmdDrawIndexed(Context->GraphicsCommandBuffer, ArrayCount(PlaneIndices), 1, 0, 0, 0);
-
-    // Draw cube meshes
-    VkDescriptorSet CubeSets[] = { Context->Shaders.UniformMatsSets[AcquiredImage.DataIndex], Context->Shaders.DefaultImageColorSet };
-    vkCmdBindDescriptorSets(Context->GraphicsCommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, Context->GraphicsPipelineLayout, 0, ArrayCount(CubeSets), CubeSets, 0, 0);
-    vkCmdBindVertexBuffers(Context->GraphicsCommandBuffer, 0, 1, &Context->StaticBuffers.VertexHandle, &Context->CubeVerticesByteOffset);
-    vkCmdBindIndexBuffer(Context->GraphicsCommandBuffer, Context->StaticBuffers.IndexHandle, Context->CubeIndicesByteOffset, VK_INDEX_TYPE_UINT32);
-    
-    float CubeTexOffsets[] = { 0.25f, 0.5f, 0.75f };
-    v2 CubePositions[] = { { -2.5f, -2.5f }, { -0.5f, -0.5f }, { 2.5f, 2.5f }, };
-    float CubeHeights[] = { 1.0f, 2.0f, 3.0f };
-    for(uint32_t I = 0; I < 3; ++I) {
-        default_push_constants DefaultCubePushConstants = {
+        // Draw plane mesh
+        VkDescriptorSet PlaneSets[] = { Context->Shaders.UniformMatsSets[AcquiredImage.DataIndex], Context->Shaders.DefaultImageTileSet };
+        vkCmdBindDescriptorSets(Context->GraphicsCommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, Context->GraphicsPipelineLayout, 0, ArrayCount(PlaneSets), PlaneSets, 0, 0);
+        float PlaneScale = 16.0f;
+        default_push_constants DefaultPlanePushConstants = {
             .M = {
-                1.0f, 0.0f, 0.0f, 0.0f,
-                0.0f, CubeHeights[I], 0.0f, 0.0f,
-                0.0f, 0.0f, 1.0f, 0.0f,
-                CubePositions[I].E[0], 0.5f*(CubeHeights[I] - 1.0f), CubePositions[I].E[1], 1.0f
+                PlaneScale, 0.0f, 0.0f, 0.0f,
+                0.0f, 1.0f, 0.0f, 0.0f,
+                0.0f, 0.0f, PlaneScale, 0.0f,
+                0.0f, -0.5f, 0.0f, 1.0f
             },
             .TexM = {
-                0.0f, 0.0f,
-                0.0f, 0.0f
+                PlaneScale, 0.0f,
+                0.0f, PlaneScale
             },
-            .TexT  = { CubeTexOffsets[I], 0.0f }
+            .TexT  = { 0.0f, 0.0f }
         };
-        
-        vkCmdPushConstants(Context->GraphicsCommandBuffer, Context->GraphicsPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(DefaultCubePushConstants), &DefaultCubePushConstants);
-        vkCmdDrawIndexed(Context->GraphicsCommandBuffer, ArrayCount(CubeIndices), 1, 0, 0, 0);
-    }
+        vkCmdBindVertexBuffers(Context->GraphicsCommandBuffer, 0, 1, &Context->StaticBuffers.VertexHandle, &Context->PlaneVerticesByteOffset);
+        vkCmdBindIndexBuffer(Context->GraphicsCommandBuffer, Context->StaticBuffers.IndexHandle, Context->PlaneIndicesByteOffset, VK_INDEX_TYPE_UINT32);
+        vkCmdPushConstants(Context->GraphicsCommandBuffer, Context->GraphicsPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(DefaultPlanePushConstants), &DefaultPlanePushConstants);
+        vkCmdDrawIndexed(Context->GraphicsCommandBuffer, ArrayCount(PlaneIndices), 1, 0, 0, 0);
 
-    vkCmdEndRenderPass(Context->GraphicsCommandBuffer);
-    VulkanCheckGoto(vkEndCommandBuffer(Context->GraphicsCommandBuffer), label_Error);
+        // Draw cube meshes
+        VkDescriptorSet CubeSets[] = { Context->Shaders.UniformMatsSets[AcquiredImage.DataIndex], Context->Shaders.DefaultImageColorSet };
+        vkCmdBindDescriptorSets(Context->GraphicsCommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, Context->GraphicsPipelineLayout, 0, ArrayCount(CubeSets), CubeSets, 0, 0);
+        vkCmdBindVertexBuffers(Context->GraphicsCommandBuffer, 0, 1, &Context->StaticBuffers.VertexHandle, &Context->CubeVerticesByteOffset);
+        vkCmdBindIndexBuffer(Context->GraphicsCommandBuffer, Context->StaticBuffers.IndexHandle, Context->CubeIndicesByteOffset, VK_INDEX_TYPE_UINT32);
+        
+        float CubeTexOffsets[] = { 0.25f, 0.5f, 0.75f };
+        v2 CubePositions[] = { { -2.5f, -2.5f }, { -0.5f, -0.5f }, { 2.5f, 2.5f }, };
+        float CubeHeights[] = { 1.0f, 2.0f, 3.0f };
+        for(uint32_t I = 0; I < 3; ++I) {
+            default_push_constants DefaultCubePushConstants = {
+                .M = {
+                    1.0f, 0.0f, 0.0f, 0.0f,
+                    0.0f, CubeHeights[I], 0.0f, 0.0f,
+                    0.0f, 0.0f, 1.0f, 0.0f,
+                    CubePositions[I].E[0], 0.5f*(CubeHeights[I] - 1.0f), CubePositions[I].E[1], 1.0f
+                },
+                .TexM = {
+                    0.0f, 0.0f,
+                    0.0f, 0.0f
+                },
+                .TexT  = { CubeTexOffsets[I], 0.0f }
+            };
+            
+            vkCmdPushConstants(Context->GraphicsCommandBuffer, Context->GraphicsPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(DefaultCubePushConstants), &DefaultCubePushConstants);
+            vkCmdDrawIndexed(Context->GraphicsCommandBuffer, ArrayCount(CubeIndices), 1, 0, 0, 0);
+        }
+
+        vkCmdEndRenderPass(Context->GraphicsCommandBuffer);
+        VulkanCheckGoto(vkEndCommandBuffer(Context->GraphicsCommandBuffer), label_Error);
+    }
 
     return 0;
 

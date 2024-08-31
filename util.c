@@ -221,8 +221,8 @@ static int MallocMultiple(int Count, malloc_multiple_subbuf *Subbufs, void **Res
 
 static int LoadFileContentsCStd(const char *Filepath, uint8_t **FileBytes, uint64_t *FileByteCount) {
     int Result = 1;
-    long int LocalFileByteCount;
-    uint8_t *LocalFileBytes;
+    long int LocalFileByteCount = 0;
+    uint8_t *LocalFileBytes = 0;
 
     FILE *File = fopen(Filepath, "rb");
     AssertMessageGoto(File, label_Exit, "File '%s' could not be opened (code %d).\n", Filepath, errno);

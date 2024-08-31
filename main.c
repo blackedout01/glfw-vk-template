@@ -51,89 +51,90 @@ static void FramebufferSizeCallbackGLFW(GLFWwindow *Window, int Width, int Heigh
 
 int main() {
     int Result = 1;
-
-    // NOTE(blackedout): "Setting up Vulkan on MacOS without Xcode"
-    // From: https://gist.github.com/Resparing/d30634fcd533ec5b3235791b21265850 (2024-07-03)
-    // Removing the environment variables is not necessary, since they seem to have the same lifetime as the process.
+    VkInstance VulkanInstance = 0;
+    base_context Context = {0};
+    vulkan_surface_device VulkanSurfaceDevice = {0};
+    vulkan_swapchain_handler VulkanSwapchainHandler = {0};
+    VkCommandBuffer GraphicsCommandBuffer = 0;
+    VkQueue VulkanGraphicsQueue = 0;
+    {
+        // NOTE(blackedout): "Setting up Vulkan on MacOS without Xcode"
+        // From: https://gist.github.com/Resparing/d30634fcd533ec5b3235791b21265850 (2024-07-03)
+        // Removing the environment variables is not necessary, since they seem to have the same lifetime as the process.
 #ifdef __APPLE__
-    if(setenv("VK_ICD_FILENAMES", "vulkan/icd.d/MoltenVK_icd.json", 1) ||
-       setenv("VK_LAYER_PATH", "vulkan/explicit_layer.d", 1)) {
-        printf("Failed to set MoltenVK environment variables.\n");
-        goto label_Exit;
-    }
+        if(setenv("VK_ICD_FILENAMES", "vulkan/icd.d/MoltenVK_icd.json", 1) ||
+        setenv("VK_LAYER_PATH", "vulkan/explicit_layer.d", 1)) {
+            printfc(CODE_RED, "Failed to set MoltenVK environment variables.\n");
+            goto label_Exit;
+        }
 #endif
 
-    glfwSetErrorCallback(ErrorCallbackGLFW);
-    if(glfwInit() == 0) {
-        goto label_Exit;
-    }
+        glfwSetErrorCallback(ErrorCallbackGLFW);
+        {
+            int InitResultGLFW = glfwInit();
+            AssertMessageGoto(InitResultGLFW, label_Exit, "GLFW initialization failed.\n");
+        }
+        AssertMessageGoto(glfwVulkanSupported(), label_TerminateGLFW, "GLFW says Vulkan is not supported on this platform.\n");
 
-    AssertMessageGoto(glfwVulkanSupported() != 0, label_TerminateGLFW, "GLFW says Vulkan is not supported on this platform.\n");
+        {
+            uint32_t RequiredInstanceExtensionCount;
+            const char **RequiredInstanceExtensionsGLFW = glfwGetRequiredInstanceExtensions(&RequiredInstanceExtensionCount);
+            AssertMessageGoto(RequiredInstanceExtensionsGLFW, label_TerminateGLFW, "GLFW didn't return any Vulkan extensions. On macOS this might be because MoltenVK is not linked correctly.\n");
 
-    VkInstance VulkanInstance;
-    {
-        uint32_t RequiredInstanceExtensionCount;
-        const char **RequiredInstanceExtensionsGLFW = glfwGetRequiredInstanceExtensions(&RequiredInstanceExtensionCount);
-        AssertMessageGoto(RequiredInstanceExtensionsGLFW > 0, label_TerminateGLFW, "GLFW didn't return any Vulkan extensions. On macOS this might be because MoltenVK is not linked correctly.\n");
+            CheckGoto(VulkanCreateInstance(RequiredInstanceExtensionsGLFW, RequiredInstanceExtensionCount, &VulkanInstance), label_TerminateGLFW);
+        }
 
-        CheckGoto(VulkanCreateInstance(RequiredInstanceExtensionsGLFW, RequiredInstanceExtensionCount, &VulkanInstance), label_TerminateGLFW);
-    }
-
-    base_context Context = {0};
-    glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-    Context.Window = glfwCreateWindow(1280, 720, "glfw-vulkan-template", 0, 0);
-    CheckGoto(Context.Window == 0, label_DestroyVulkanInstance);
-    
-    glfwSetWindowUserPointer(Context.Window, &Context);
-    glfwSetKeyCallback(Context.Window, KeyCallbackGLFW);
-    glfwSetCursorPosCallback(Context.Window, CursorPositionCallbackGLFW);
-    glfwSetMouseButtonCallback(Context.Window, MouseButtonCallbackGLFW);
-    glfwSetScrollCallback(Context.Window, ScrollCallbackGLFW);
-    glfwSetFramebufferSizeCallback(Context.Window, FramebufferSizeCallbackGLFW);
-
-    {
-        int Width, Height;
-        glfwGetFramebufferSize(Context.Window, &Width, &Height);
-        Context.FramebufferExtent.width = (uint32_t)Width;
-        Context.FramebufferExtent.height = (uint32_t)Height;
-    }
-    
-    vulkan_surface_device VulkanSurfaceDevice;
-    {
-        VkSurfaceKHR VulkanSurface;
-        VulkanCheckGoto(glfwCreateWindowSurface(VulkanInstance, Context.Window, 0, &VulkanSurface), label_DestroyVulkanInstance);
+        glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
+        Context.Window = glfwCreateWindow(1280, 720, "glfw-vulkan-template", 0, 0);
+        CheckGoto(Context.Window == 0, label_DestroyVulkanInstance);
         
-        // NOTE(blackedout): The surface is freed inside of this function on failure.
-        CheckGoto(VulkanCreateSurfaceDevice(VulkanInstance, VulkanSurface, &VulkanSurfaceDevice), label_DestroyVulkanInstance);
-    }
+        glfwSetWindowUserPointer(Context.Window, &Context);
+        glfwSetKeyCallback(Context.Window, KeyCallbackGLFW);
+        glfwSetCursorPosCallback(Context.Window, CursorPositionCallbackGLFW);
+        glfwSetMouseButtonCallback(Context.Window, MouseButtonCallbackGLFW);
+        glfwSetScrollCallback(Context.Window, ScrollCallbackGLFW);
+        glfwSetFramebufferSizeCallback(Context.Window, FramebufferSizeCallbackGLFW);
 
-    vulkan_swapchain_handler VulkanSwapchainHandler;
-    VkCommandBuffer GraphicsCommandBuffer;
-    VkQueue VulkanGraphicsQueue;
-    {
-        VkRenderPass RenderPass;
-        VkSampleCountFlagBits SampleCount;
-        CheckGoto(ProgramSetup(&Context.ProgramContext, &VulkanSurfaceDevice, &GraphicsCommandBuffer, &VulkanGraphicsQueue, &RenderPass, &SampleCount), label_DestroySurfaceDevice);
+        {
+            int Width, Height;
+            glfwGetFramebufferSize(Context.Window, &Width, &Height);
+            Context.FramebufferExtent.width = (uint32_t)Width;
+            Context.FramebufferExtent.height = (uint32_t)Height;
+        }
         
-        CheckGoto(VulkanCreateSwapchainAndHandler(&VulkanSurfaceDevice, Context.FramebufferExtent, SampleCount, RenderPass, &VulkanSwapchainHandler), label_ProgramSetdown);
-    }
+        {
+            VkSurfaceKHR VulkanSurface;
+            VulkanCheckGoto(glfwCreateWindowSurface(VulkanInstance, Context.Window, 0, &VulkanSurface), label_DestroyVulkanInstance);
+            
+            // NOTE(blackedout): The surface is freed inside of this function on failure.
+            CheckGoto(VulkanCreateSurfaceDevice(VulkanInstance, VulkanSurface, &VulkanSurfaceDevice), label_DestroyVulkanInstance);
+        }
 
-    double TimeStart = glfwGetTime(), DeltaTime = 0.0;
-    while(glfwWindowShouldClose(Context.Window) == 0) {
-        glfwPollEvents();
+        {
+            VkRenderPass RenderPass;
+            VkSampleCountFlagBits SampleCount;
+            CheckGoto(ProgramSetup(&Context.ProgramContext, &VulkanSurfaceDevice, &GraphicsCommandBuffer, &VulkanGraphicsQueue, &RenderPass, &SampleCount), label_DestroySurfaceDevice);
+            
+            CheckGoto(VulkanCreateSwapchainAndHandler(&VulkanSurfaceDevice, Context.FramebufferExtent, SampleCount, RenderPass, &VulkanSwapchainHandler), label_ProgramSetdown);
+        }
 
-        CheckGoto(ProgramUpdate(&Context.ProgramContext, &VulkanSurfaceDevice, DeltaTime), label_IdleDestroyAndExit);
+        double TimeStart = glfwGetTime(), DeltaTime = 0.0;
+        while(glfwWindowShouldClose(Context.Window) == 0) {
+            glfwPollEvents();
 
-        vulkan_acquired_image AcquiredImage;
-        CheckGoto(VulkanAcquireNextImage(&VulkanSurfaceDevice, &VulkanSwapchainHandler, Context.FramebufferExtent, &AcquiredImage), label_IdleDestroyAndExit);
-        CheckGoto(ProgramRender(&Context.ProgramContext, &VulkanSurfaceDevice, AcquiredImage), label_IdleDestroyAndExit);
-        CheckGoto(VulkanSubmitFinalAndPresent(&VulkanSurfaceDevice, &VulkanSwapchainHandler, VulkanGraphicsQueue, GraphicsCommandBuffer, Context.FramebufferExtent), label_IdleDestroyAndExit);
-        
-        //SleepMilliseconds(1000); // NOTE(blackedout): EDITING THIS MIGHT CAUSE IMAGE FLASHING
+            CheckGoto(ProgramUpdate(&Context.ProgramContext, &VulkanSurfaceDevice, DeltaTime), label_IdleDestroyAndExit);
 
-        double Time = glfwGetTime();
-        DeltaTime = TimeStart - Time;
-        TimeStart = Time;   
+            vulkan_acquired_image AcquiredImage;
+            CheckGoto(VulkanAcquireNextImage(&VulkanSurfaceDevice, &VulkanSwapchainHandler, Context.FramebufferExtent, &AcquiredImage), label_IdleDestroyAndExit);
+            CheckGoto(ProgramRender(&Context.ProgramContext, &VulkanSurfaceDevice, AcquiredImage), label_IdleDestroyAndExit);
+            CheckGoto(VulkanSubmitFinalAndPresent(&VulkanSurfaceDevice, &VulkanSwapchainHandler, VulkanGraphicsQueue, GraphicsCommandBuffer, Context.FramebufferExtent), label_IdleDestroyAndExit);
+            
+            //SleepMilliseconds(1000); // NOTE(blackedout): EDITING THIS MIGHT CAUSE IMAGE FLASHING
+
+            double Time = glfwGetTime();
+            DeltaTime = Time - TimeStart;
+            TimeStart = Time;   
+        }
     }
 
     Result = 0;
