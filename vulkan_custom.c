@@ -283,7 +283,8 @@ static int VulkanCreateDefaultGraphicsPipeline(vulkan_surface_device *Device, Vk
             .alphaToOneEnable = VK_FALSE
         };
         
-        VkStencilOpState EmptyStencilOpState = {0};
+        VkStencilOpState EmptyStencilOpState;
+        memset(&EmptyStencilOpState, 0, sizeof(EmptyStencilOpState));
         VkPipelineDepthStencilStateCreateInfo PipelineDepthStencilStateCreateInfo = {
             .sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
             .pNext = 0,
