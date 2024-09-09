@@ -348,9 +348,11 @@ static int VulkanCreateExclusiveImageWithMemoryAndView(vulkan_surface_device *De
             .flags = 0,
             .imageType = Type,
             .format = Format,
-            .extent.width = Width,
-            .extent.height = Height,
-            .extent.depth = Depth,
+            .extent = {
+                .width = Width,
+                .height = Height,
+                .depth = Depth,
+            },
             .mipLevels = 1,
             .arrayLayers = 1,
             .samples = SampleCount,
@@ -495,6 +497,7 @@ static int VulkanCreateStaticBuffersAndImages(vulkan_surface_device *Device, vul
 
         // NOTE(blackedout): Create image handles, allocate and bind its memory, then create view handles
         uint64_t AlignedTotalImagesByteCount = 0;
+        uint64_t FirstImageAlignment = 0;
         uint32_t ImageMemoryTypeBits = ~(uint32_t)0;
         for(uint32_t I = 0; I < ImageCount; ++I) {
             vulkan_image_description ImageDescription = ImageDescriptions[I];
@@ -504,9 +507,11 @@ static int VulkanCreateStaticBuffersAndImages(vulkan_surface_device *Device, vul
                 .flags = 0,
                 .imageType = ImageDescription.Type,
                 .format = ImageDescription.Format,
-                .extent.width = ImageDescription.Width,
-                .extent.height = ImageDescription.Height,
-                .extent.depth = ImageDescription.Depth,
+                .extent = {
+                    .width = ImageDescription.Width,
+                    .height = ImageDescription.Height,
+                    .depth = ImageDescription.Depth
+                },
                 .mipLevels = 1,
                 .arrayLayers = 1,
                 .samples = VK_SAMPLE_COUNT_1_BIT,
@@ -525,11 +530,15 @@ static int VulkanCreateStaticBuffersAndImages(vulkan_surface_device *Device, vul
             vkGetImageMemoryRequirements(DeviceHandle, Images[I].Handle, &ImageMemoryRequirements);
 
             uint64_t ByteOffset = AlignAny(AlignedTotalImagesByteCount, uint64_t, ImageMemoryRequirements.alignment);
-            AlignedTotalImagesByteCount += ByteOffset + ImageMemoryRequirements.size;
+            AlignedTotalImagesByteCount = ByteOffset + ImageMemoryRequirements.size;
             Images[I].Offset = ByteOffset;
 
             // TODO(blackedout): Handle this getting too restrictive
             ImageMemoryTypeBits &= ImageMemoryRequirements.memoryTypeBits;
+
+            if(I == 0) {
+                FirstImageAlignment = ImageMemoryRequirements.alignment;
+            }
         }
         uint32_t ImageMemoryTypeIndex;
         CheckGoto(VulkanGetBufferMemoryTypeIndex(Device, ImageMemoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &ImageMemoryTypeIndex), label_Images);
@@ -569,10 +578,13 @@ static int VulkanCreateStaticBuffersAndImages(vulkan_surface_device *Device, vul
         }
 
         // NOTE(blackedout): Create and fill staging buffer
+        // Staging buffer sections are created with alignments of destination buffers, because I'm not sure
+        // what alignment rules apply to transfer operations.
+        AlignedTotalBuffersByteCount = AlignAny(AlignedTotalBuffersByteCount, uint64_t, FirstImageAlignment);
         CheckGoto(VulkanCreateExclusiveBufferWithMemory(Device, AlignedTotalBuffersByteCount + AlignedTotalImagesByteCount, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &StagingBuffer), label_Images);
 
         uint8_t *MappedStagingBuffer;
-        VulkanCheckGoto(vkMapMemory(DeviceHandle, StagingBuffer.Memory, 0, AlignedTotalBuffersByteCount, 0, (void **)&MappedStagingBuffer), label_StagingBuffer);
+        VulkanCheckGoto(vkMapMemory(DeviceHandle, StagingBuffer.Memory, 0, AlignedTotalBuffersByteCount + AlignedTotalImagesByteCount, 0, (void **)&MappedStagingBuffer), label_StagingBuffer);
         uint64_t VertexOffset = 0, IndexOffset = 0;
         for(uint32_t I = 0; I < MeshSubbufCount; ++I) {
             vulkan_mesh_subbuf Subbuf = MeshSubbufs[I];
@@ -587,11 +599,9 @@ static int VulkanCreateStaticBuffersAndImages(vulkan_surface_device *Device, vul
                 IndexOffset += Subbuf.Indices.ByteCount;
             }
         }
-        uint64_t ImageOffset = 0;
         for(uint32_t I = 0; I < ImageCount; ++I) {
             vulkan_image_description ImageDescription = ImageDescriptions[I];
-            memcpy(MappedStagingBuffer + AlignedTotalBuffersByteCount + ImageOffset, ImageDescription.Source, ImageDescription.ByteCount);
-            ImageOffset = ImageDescription.ByteCount;
+            memcpy(MappedStagingBuffer + AlignedTotalBuffersByteCount + Images[I].Offset, ImageDescription.Source, ImageDescription.ByteCount);
         }
         vkUnmapMemory(DeviceHandle, StagingBuffer.Memory);
 
@@ -639,23 +649,28 @@ static int VulkanCreateStaticBuffersAndImages(vulkan_surface_device *Device, vul
                 .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
                 .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
                 .image = Images[I].Handle,
-                .subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-                .subresourceRange.baseMipLevel = 0,
-                .subresourceRange.levelCount = 1,
-                .subresourceRange.baseArrayLayer = 0,
-                .subresourceRange.layerCount = 1,
+                .subresourceRange = {
+                    .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                    .baseMipLevel = 0,
+                    .levelCount = 1,
+                    .baseArrayLayer = 0,
+                    .layerCount = 1
+                }
             };
             vkCmdPipelineBarrier(TransferCommandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, 0, 0, 0, 1, &ImageMemoryBarrier);
         }
+        
         for(uint32_t I = 0; I < ImageCount; ++I) {
             VkBufferImageCopy BufferImageCopy = {
                 .bufferOffset = AlignedTotalBuffersByteCount + Images[I].Offset,
                 .bufferRowLength = 0,
                 .bufferImageHeight = 0,
-                .imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-                .imageSubresource.mipLevel = 0,
-                .imageSubresource.baseArrayLayer = 0,
-                .imageSubresource.layerCount = 1,
+                .imageSubresource = {
+                    .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                    .mipLevel = 0,
+                    .baseArrayLayer = 0,
+                    .layerCount = 1,
+                },
                 .imageOffset = { 0, 0, 0 },
                 .imageExtent = { ImageDescriptions[I].Width, ImageDescriptions[I].Height, ImageDescriptions[I].Depth } // TODO
             };
@@ -672,11 +687,13 @@ static int VulkanCreateStaticBuffersAndImages(vulkan_surface_device *Device, vul
                 .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
                 .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
                 .image = Images[I].Handle,
-                .subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-                .subresourceRange.baseMipLevel = 0,
-                .subresourceRange.levelCount = 1,
-                .subresourceRange.baseArrayLayer = 0,
-                .subresourceRange.layerCount = 1,
+                .subresourceRange = {
+                    .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                    .baseMipLevel = 0,
+                    .levelCount = 1,
+                    .baseArrayLayer = 0,
+                    .layerCount = 1,
+                }
             };
             vkCmdPipelineBarrier(TransferCommandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, 0, 0, 0, 1, &ImageMemoryBarrier);
         }
@@ -1262,8 +1279,9 @@ static int VulkanCreateSurfaceDevice(VkInstance Instance, VkSurfaceKHR Surface, 
 
         vulkan_surface_device LocalSurfaceDevice = {
             .Handle = DeviceHandle,
-            .PhysicalDevice = BestPhysicalDevice,
             .Surface = Surface,
+            .PhysicalDevice = BestPhysicalDevice,
+            
             .GraphicsQueueFamilyIndex = BestPhysicalDeviceGraphicsQueueIndex,
             .PresentQueueFamilyIndex = BestPhysicalDeviceSurfaceQueueIndex,
 
@@ -1663,10 +1681,7 @@ static int VulkanSubmitFinalAndPresent(vulkan_surface_device *Device, vulkan_swa
         };
 
         //printf("Queueing image %d of swapchain %d for presentaton.\n", PresentInfo.pImageIndices[0], SwapchainIndex);
-        double before = glfwGetTime();
         VkResult PresentResult = vkQueuePresentKHR(GraphicsQueue, &PresentInfo);
-        double after = glfwGetTime();
-        //printf("Took %f s.\n", after - before);
         if(PresentResult == VK_SUBOPTIMAL_KHR || PresentResult == VK_ERROR_OUT_OF_DATE_KHR) {
             // TODO(blackedout): There is still an issue where sometimes the next frame is not rendered (clear color only) when resizing multiple times in quick succession
             vulkan_swapchain NewSwapchain = Handler.Swapchains[SwapchainIndex];

@@ -239,23 +239,23 @@ static int ProgramSetup(context *Context, vulkan_surface_device *Device, VkComma
             }
         };
 
+        uint8_t ColorImageBytes[] = {
+            0xff, 0x20, 0x20, 0xff,
+            0x20, 0xff, 0x20, 0xff,
+            0x20, 0x20, 0xff, 0xff,
+        };
         uint8_t TileImageBytes[] = {
             0xff, 0xff, 0xff, 0xff,
             0xf9, 0xf9, 0xfd, 0xff,
             0xf9, 0xf9, 0xfd, 0xff,
             0xff, 0xff, 0xff, 0xff,
         };
-        uint8_t ColorImageBytes[] = {
-            0xff, 0x20, 0x20, 0xff,
-            0x20, 0xff, 0x20, 0xff,
-            0x20, 0x20, 0xff, 0xff,
-        };
-        vulkan_image_description ImageDescriptions[STATIC_IMAGE_COUNT] = {
-            [STATIC_IMAGE_COLOR] =
-            { .Type = VK_IMAGE_TYPE_2D, .ViewType = VK_IMAGE_VIEW_TYPE_2D, .Format = VK_FORMAT_R8G8B8A8_SRGB, .Width = 2, .Height = 2, .Depth = 1, .Source = TileImageBytes, .ByteCount = sizeof(TileImageBytes) },
-            [STATIC_IMAGE_TILE] =
-            { .Type = VK_IMAGE_TYPE_2D, .ViewType = VK_IMAGE_VIEW_TYPE_2D, .Format = VK_FORMAT_R8G8B8A8_SRGB, .Width = ArrayCount(ColorImageBytes)/4, .Height = 1, .Depth = 1, .Source = ColorImageBytes, .ByteCount = sizeof(ColorImageBytes) },
-        };
+        vulkan_image_description StaticImageColor = { .Type = VK_IMAGE_TYPE_2D, .ViewType = VK_IMAGE_VIEW_TYPE_2D, .Format = VK_FORMAT_R8G8B8A8_SRGB, .Width = ArrayCount(ColorImageBytes)/4, .Height = 1, .Depth = 1, .ByteCount = sizeof(ColorImageBytes), .Source = ColorImageBytes };
+        vulkan_image_description StaticImageTile = { .Type = VK_IMAGE_TYPE_2D, .ViewType = VK_IMAGE_VIEW_TYPE_2D, .Format = VK_FORMAT_R8G8B8A8_SRGB, .Width = 2, .Height = 2, .Depth = 1, .ByteCount = sizeof(TileImageBytes), .Source = TileImageBytes };
+        vulkan_image_description ImageDescriptions[STATIC_IMAGE_COUNT];
+        memset(ImageDescriptions, 0, sizeof(ImageDescriptions));
+        ImageDescriptions[STATIC_IMAGE_COLOR] = StaticImageColor;
+        ImageDescriptions[STATIC_IMAGE_TILE] = StaticImageTile;
         CheckGoto(VulkanCreateStaticBuffersAndImages(Device, MeshSubbufs, ArrayCount(MeshSubbufs), ImageDescriptions, ArrayCount(LocalContext.Images), LocalContext.GraphicsCommandPool, LocalContext.GraphicsQueue, &LocalContext.StaticBuffers, LocalContext.Images), label_Error);
         LocalContext.ImagesInitialized = 1;
 

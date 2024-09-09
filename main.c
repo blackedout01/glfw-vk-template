@@ -4,9 +4,9 @@
 #include <string.h>
 #include <math.h>
 
+#include "util.c" // NOTE(blackedout): util might include and use platform specific code, so do this before glfw to avoid errors.
 #include "GLFW/glfw3.h"
 
-#include "util.c"
 #include "vulkan_helpers.c"
 
 #include "program.c"

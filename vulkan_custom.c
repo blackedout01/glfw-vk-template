@@ -38,12 +38,12 @@ static int LoadShaders(vulkan_surface_device *Device, shaders *Shaders, vulkan_i
             { .binding = 1, .descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER, .descriptorCount = 1, .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT, .pImmutableSamplers = 0 },
             { .binding = 2, .descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, .descriptorCount = 1, .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT, .pImmutableSamplers = 0 }
         };
-        vulkan_descriptor_set_layout_description DescriptorSetDescriptions[] = {
-            [DESCRIPTOR_SET_LAYOUT_DEFAULT_UNIFORM] =
-            { .Flags = 0, .Bindings = DefaultUniformDescriptorSetLayoutBinding, .BindingsCount = ArrayCount(DefaultUniformDescriptorSetLayoutBinding) },
-            [DESCRIPTOR_SET_LAYOUT_DEFAULT_SAMPLER_IMAGE] =
-            { .Flags = 0, .Bindings = DefaultDescriptorSetLayoutBindings, .BindingsCount = ArrayCount(DefaultDescriptorSetLayoutBindings) },
-        };
+        // TODO(blackedout): Why does MSVC have to be so annoying ._. I just want to use array index initializers like in C
+        vulkan_descriptor_set_layout_description DescriptorSetDescriptionUniform = { .Flags = 0, .Bindings = DefaultUniformDescriptorSetLayoutBinding, .BindingsCount = ArrayCount(DefaultUniformDescriptorSetLayoutBinding) };
+        vulkan_descriptor_set_layout_description DescriptorSetDescriptionSamplerImage = { .Flags = 0, .Bindings = DefaultDescriptorSetLayoutBindings, .BindingsCount = ArrayCount(DefaultDescriptorSetLayoutBindings) };
+        vulkan_descriptor_set_layout_description DescriptorSetDescriptions[DESCRIPTOR_SET_LAYOUT_COUNT] = {0};
+        DescriptorSetDescriptions[DESCRIPTOR_SET_LAYOUT_DEFAULT_UNIFORM] = DescriptorSetDescriptionUniform;
+        DescriptorSetDescriptions[DESCRIPTOR_SET_LAYOUT_DEFAULT_SAMPLER_IMAGE] = DescriptorSetDescriptionSamplerImage;            
         CheckGoto(VulkanCreateDescriptorSetLayouts(Device, DescriptorSetDescriptions, ArrayCount(DescriptorSetDescriptions), LocalShaders.DescriptorSetLayouts), label_FS);
         
         // NOTE(blackedout): Create all uniform buffers mapped with unique descriptor set pool and correctly initialized sets
@@ -104,8 +104,8 @@ static int LoadShaders(vulkan_surface_device *Device, shaders *Shaders, vulkan_i
         };
         VkDescriptorSet DefaultSets[2];
         VulkanCheckGoto(vkAllocateDescriptorSets(DeviceHandle, &DescriptorSetAllocateInfo, DefaultSets), label_DefaultDescriptorPool);
-        LocalShaders.DefaultImageTileSet = DefaultSets[0];
-        LocalShaders.DefaultImageColorSet = DefaultSets[1];
+        LocalShaders.DefaultImageColorSet = DefaultSets[0];
+        LocalShaders.DefaultImageTileSet = DefaultSets[1];
 
         VkImageView ImageViews[2] = { Images[0].ViewHandle, Images[1].ViewHandle };
         for(uint32_t I = 0; I < 2; ++I) {
@@ -283,6 +283,7 @@ static int VulkanCreateDefaultGraphicsPipeline(vulkan_surface_device *Device, Vk
             .alphaToOneEnable = VK_FALSE
         };
         
+        VkStencilOpState EmptyStencilOpState = {0};
         VkPipelineDepthStencilStateCreateInfo PipelineDepthStencilStateCreateInfo = {
             .sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
             .pNext = 0,
@@ -292,8 +293,8 @@ static int VulkanCreateDefaultGraphicsPipeline(vulkan_surface_device *Device, Vk
             .depthCompareOp = VK_COMPARE_OP_LESS,
             .depthBoundsTestEnable = VK_FALSE,
             .stencilTestEnable = VK_FALSE,
-            .front = {},
-            .back = {},
+            .front = EmptyStencilOpState,
+            .back = EmptyStencilOpState,
             .minDepthBounds = 0.0f,
             .maxDepthBounds = 1.0f,
         };

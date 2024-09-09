@@ -29,4 +29,5 @@ void main() {
 
     vec4 TexColor = texture(sampler2D(Tex, Sampler), TexM*FragTexCoord + TexT);
     Result = vec4(I*TexColor.rgb, 1.0);
+    //Result = vec4(vec3(TexT.st, 0.0), 1.0);
 }
