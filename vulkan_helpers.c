@@ -9,6 +9,10 @@
 #endif
 #define MAX_SWAPCHAIN_COUNT (MAX_ACQUIRED_IMAGE_COUNT + 1)
 
+static const char *VULKAN_REQUESTED_INSTANCE_LAYERS[] = {
+    "VK_LAYER_KHRONOS_validation"
+};
+
 typedef struct {
     VkDevice Handle;
     VkSurfaceKHR Surface;
@@ -999,7 +1003,7 @@ static int VulkanCreateInstance(const char **PlatformRequiredInstanceExtensions,
         const char *InstanceExtensions[16];
         // NOTE(blackedout): Leave room for additional 1 extensions (portability extension)
         AssertMessageGoto(PlatformRequiredInstanceExtensionCount <= 15, label_Error,
-                        "Too many required instance extensions (%d). Increase array buffer size to fix.\n", PlatformRequiredInstanceExtensionCount);
+                        "Too many required instance extensions (%d). Increase array buffer size to fix.", PlatformRequiredInstanceExtensionCount);
         
         uint32_t InstanceExtensionCount;
         for(InstanceExtensionCount = 0; InstanceExtensionCount < PlatformRequiredInstanceExtensionCount; ++InstanceExtensionCount) {
@@ -1016,18 +1020,42 @@ static int VulkanCreateInstance(const char **PlatformRequiredInstanceExtensions,
             .apiVersion = VK_API_VERSION_1_3,
         };
 
-        // TODO(blackedout): Check if these are actually available (and create custom error callback functions?)
-        const char *ValidationLayers[] = {
-            "VK_LAYER_KHRONOS_validation"
-        };
+        uint32_t InstanceLayerPropertyCount;
+        VulkanCheckGoto(vkEnumerateInstanceLayerProperties(&InstanceLayerPropertyCount, 0), label_Error);
+
+        VkLayerProperties InstanceLayerProperties[16];
+        AssertMessageGoto(InstanceLayerPropertyCount <= ArrayCount(InstanceLayerProperties), label_Error,
+                        "Too many available instance layers (%d). Increase buffer size to fix.", InstanceLayerPropertyCount);
+        InstanceLayerPropertyCount = ArrayCount(InstanceLayerProperties);
+        VulkanCheckGoto(vkEnumerateInstanceLayerProperties(&InstanceLayerPropertyCount, InstanceLayerProperties), label_Error);
+
+        // TODO(blackedout): Create custom error callback functions?
+
+        const char *AvaiableRequestedValidationLayers[ArrayCount(VULKAN_REQUESTED_INSTANCE_LAYERS)];
+        uint32_t AvaiableRequestedValidationLayerCount = 0;
+        for(uint32_t I = 0; I < ArrayCount(VULKAN_REQUESTED_INSTANCE_LAYERS); ++I) {
+            const char *Layer = VULKAN_REQUESTED_INSTANCE_LAYERS[I];
+
+            int Found = 0;
+            for(uint32_t J = 0; J < InstanceLayerPropertyCount; ++J) {
+                if(strcmp(Layer, InstanceLayerProperties[J].layerName) == 0) {
+                    AvaiableRequestedValidationLayers[AvaiableRequestedValidationLayerCount++] = Layer;
+                    Found = 1;
+                    break;
+                }
+            }
+            if(Found == 0) {
+                printfc(CODE_YELLOW, "Validation layer %s is not available.\n", Layer);
+            }
+        }
 
         VkInstanceCreateInfo InstanceCreateInfo = {
             .sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
             .pNext = 0,
             .flags = 0,
             .pApplicationInfo = &VulkanApplicationInfo,
-            .enabledLayerCount = ArrayCount(ValidationLayers),
-            .ppEnabledLayerNames = ValidationLayers,
+            .enabledLayerCount = AvaiableRequestedValidationLayerCount,
+            .ppEnabledLayerNames = AvaiableRequestedValidationLayers,
             .enabledExtensionCount = InstanceExtensionCount,
             .ppEnabledExtensionNames = InstanceExtensions,
         };
@@ -1048,6 +1076,18 @@ static int VulkanCreateInstance(const char **PlatformRequiredInstanceExtensions,
         printf("Vulkan Instance Extensions (%d):\n", InstanceExtensionCount);
         for(uint32_t I = 0; I < InstanceExtensionCount; ++I) {
             printf("[%d] %s%s\n", I, InstanceExtensions[I], (I < PlatformRequiredInstanceExtensionCount)? " (platform)" : "");
+        }
+
+        printf("Vulkan available instance layers (%d):\n", InstanceLayerPropertyCount);
+        for(uint32_t I = 0; I < InstanceLayerPropertyCount; ++I) {
+            int Found = 0;
+            for(uint32_t J = 0; J < AvaiableRequestedValidationLayerCount; ++J) {
+                if(strcmp(InstanceLayerProperties[I].layerName, AvaiableRequestedValidationLayers[J]) == 0) {
+                    Found = 1;
+                    break;
+                }
+            }
+            printf("[%d] %s%s\n", I, InstanceLayerProperties[I].layerName, Found? " (requested)" : "");
         }
 #endif
         

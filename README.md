@@ -42,5 +42,34 @@ set vulkan_sdk=C:\Users\Me\VulkanSDK
 <br/>This compiles the program and the default shader located in `shaders` (into `bin\shaders`). For convenience of execution, the program is not stored in the `bin` folder.
 <br/>**Run project:** `main`
 
-## Build on Linux
-TBD
+
+## Build on Linux (GCC)
+Currently, only x86_64 architecture is supported.
+
+#### 1. Install the Vulkan SDK and configure `buildlibs.sh`
+Download the SDK as a `.tar.xz` file from https://vulkan.lunarg.com/sdk/home#linux and extract it.
+<br/>In the `buildlibs.sh` file, modify the line that sets the variable `vulkan_sdk` to contain the path to your Vulkan SDK. Important: the correct directory is the one that contains `LICENSE.txt` and the path should be absolute.
+
+#### 2. Install X11 development dependencies
+This is neccessary to compile the GLFW library for X11. See [Dependencies for X11 on Unix-like systems](https://www.glfw.org/docs/3.3/compile.html#compile_deps_x11) for details.
+On Debian and derivatives like Ubuntu and Linux Mint you need to run:
+
+```
+sudo apt install xorg-dev
+```
+#### 3. Compile the libraries
+Running the buildlibs script compiles all library source files into one file for each library, e.g. `bin/glfw.a` for GLFW. It also copies the `vulkan_sdk` variable to the `build.sh` file. You only need to do this once.
+```
+sh buildlibs.sh
+```
+
+#### 4. Compile the program
+The build script compiles the program and links neccesary libaries. The output file is `a.out`. It also compiles the two default shader files into `bin/shaders`.
+```
+sh build.sh
+```
+
+#### 5. Run the program
+```
+./a.out
+```

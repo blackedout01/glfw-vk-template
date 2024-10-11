@@ -61,10 +61,17 @@ int main() {
         // NOTE(blackedout): "Setting up Vulkan on MacOS without Xcode"
         // From: https://gist.github.com/Resparing/d30634fcd533ec5b3235791b21265850 (2024-07-03)
         // Removing the environment variables is not necessary, since they seem to have the same lifetime as the process.
-#ifdef __APPLE__
-        if(setenv("VK_ICD_FILENAMES", "vulkan/icd.d/MoltenVK_icd.json", 1) ||
-        setenv("VK_LAYER_PATH", "vulkan/explicit_layer.d", 1)) {
-            printfc(CODE_RED, "Failed to set MoltenVK environment variables.\n");
+#ifdef VULKAN_EXPLICIT_LAYERS_PATH
+        if(setenv("VK_ADD_LAYER_PATH", VULKAN_EXPLICIT_LAYERS_PATH, 1)) {
+            printfc(CODE_RED, "Failed to set VK_ADD_LAYER_PATH.\n");
+            goto label_Exit;
+        }
+#endif
+
+#ifdef VULKAN_DRIVER_FILES
+/*setenv("VK_ICD_FILENAMES", "vulkan/icd.d/MoltenVK_icd.json", 1) ||*/
+        if(setenv("VK_DRIVER_FILES", VULKAN_DRIVER_FILES, 1)) {
+            printfc(CODE_RED, "Failed to set VULKAN_DRIVER_FILES.\n");
             goto label_Exit;
         }
 #endif

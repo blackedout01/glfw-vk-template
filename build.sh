@@ -21,17 +21,29 @@
 #
 # For more information, please refer to https://unlicense.org
 
-vulkan_sdk="/Applications/VulkanSDK"
+vulkan_sdk="/home/kilian/VulkanSDK"
 
-include_paths="-I$vulkan_sdk/macOS/include -Iglfw/include"
-library_paths="-L$vulkan_sdk/macOS/lib"
+if [ "$(uname)" = "Darwin" ]; then
+    is_macos=true
+    vulkan_sdk_platform="$vulkan_sdk/macOS"
+else
+    is_macos=false
+    vulkan_sdk_platform="$vulkan_sdk/x86_64"
+fi
 
-clang -g -O0 $include_paths $library_paths -DGLFW_INCLUDE_VULKAN main.c bin/glfw.a -framework Cocoa -framework IOKit -Wl,-rpath,$vulkan_sdk/macOS/lib -lvulkan
+include_paths="-I$vulkan_sdk_platform/include -Iglfw/include"
+library_paths="-L$vulkan_sdk_platform/lib"
+defines="-DGLFW_INCLUDE_VULKAN -DVULKAN_EXPLICIT_LAYERS_PATH=\"$vulkan_sdk_platform/share/vulkan/explicit_layer.d\""
+
+if [ "$is_macos" = true ]; then
+    clang -g -O0 $include_paths $library_paths -DGLFW_INCLUDE_VULKAN main.c bin/glfw.a -framework Cocoa -framework IOKit -Wl,-rpath,$vulkan_sdk_platform/lib -lvulkan
+else
+    gcc -g -O0 $include_paths $library_paths $defines main.c bin/glfw.a -lm -lvulkan -Wl,--disable-new-dtags,-rpath=$vulkan_sdk_platform/lib
+fi
 
 # Compile all shaders
 mkdir -p bin/shaders
 
-glslc="$vulkan_sdk/macOS/bin/glslc"
-
+glslc="$vulkan_sdk_platform/bin/glslc"
 $glslc shaders/default.vert -o bin/shaders/default.vert.spv
 $glslc shaders/default.frag -o bin/shaders/default.frag.spv
