@@ -1,3 +1,26 @@
+// Original source in https://github.com/blackedout01/glfw-vk-template
+//
+// This is free and unencumbered software released into the public domain.
+// Anyone is free to copy, modify, publish, use, compile, sell, or distribute
+// this software, either in source code form or as a compiled binary, for any
+// purpose, commercial or non-commercial, and by any means.
+//
+// In jurisdictions that recognize copyright laws, the author or authors of
+// this software dedicate any and all copyright interest in the software to the
+// public domain. We make this dedication for the benefit of the public at
+// large and to the detriment of our heirs and successors. We intend this
+// dedication to be an overt act of relinquishment in perpetuity of all present
+// and future rights to this software under copyright law.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
+// ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
+// WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+//
+// For more information, please refer to https://unlicense.org
+
 #include <stdlib.h>
 #include <stdio.h>
 #include <errno.h>
@@ -58,22 +81,15 @@ int main() {
     VkCommandBuffer GraphicsCommandBuffer = 0;
     VkQueue VulkanGraphicsQueue = 0;
     {
-        // NOTE(blackedout): "Setting up Vulkan on MacOS without Xcode"
-        // From: https://gist.github.com/Resparing/d30634fcd533ec5b3235791b21265850 (2024-07-03)
+        // NOTE(blackedout):
+        // VK_ADD_LAYER_PATH: path where vulkan will look for additional layers (neccessary for validation layers on linux and macOS).
+        // VK_DRIVER_FILES: colon separated files that vulkan will look at to set the driver that will be used (neccessary on macOS for MoltenVK).
         // Removing the environment variables is not necessary, since they seem to have the same lifetime as the process.
 #ifdef VULKAN_EXPLICIT_LAYERS_PATH
-        if(setenv("VK_ADD_LAYER_PATH", VULKAN_EXPLICIT_LAYERS_PATH, 1)) {
-            printfc(CODE_RED, "Failed to set VK_ADD_LAYER_PATH.\n");
-            goto label_Exit;
-        }
+        AssertMessageGoto(setenv("VK_ADD_LAYER_PATH", VULKAN_EXPLICIT_LAYERS_PATH, 1) == 0, label_Exit, "Failed to set VK_ADD_LAYER_PATH.\n");
 #endif
-
 #ifdef VULKAN_DRIVER_FILES
-/*setenv("VK_ICD_FILENAMES", "vulkan/icd.d/MoltenVK_icd.json", 1) ||*/
-        if(setenv("VK_DRIVER_FILES", VULKAN_DRIVER_FILES, 1)) {
-            printfc(CODE_RED, "Failed to set VULKAN_DRIVER_FILES.\n");
-            goto label_Exit;
-        }
+        AssertMessageGoto(setenv("VK_DRIVER_FILES", VULKAN_DRIVER_FILES, 1) == 0, label_Exit, "Failed to set VULKAN_DRIVER_FILES.\n");
 #endif
 
         glfwSetErrorCallback(ErrorCallbackGLFW);

@@ -1,4 +1,4 @@
-# Original source: https://github.com/blackedout01/glfw-vk-template
+# Original source in https://github.com/blackedout01/glfw-vk-template
 #
 # This is free and unencumbered software released into the public domain.
 # Anyone is free to copy, modify, publish, use, compile, sell, or distribute
@@ -21,7 +21,7 @@
 #
 # For more information, please refer to https://unlicense.org
 
-vulkan_sdk="/home/kilian/VulkanSDK"
+vulkan_sdk="/Applications/VulkanSDK"
 
 if [ "$(uname)" = "Darwin" ]; then
     is_macos=true
@@ -36,7 +36,9 @@ library_paths="-L$vulkan_sdk_platform/lib"
 defines="-DGLFW_INCLUDE_VULKAN -DVULKAN_EXPLICIT_LAYERS_PATH=\"$vulkan_sdk_platform/share/vulkan/explicit_layer.d\""
 
 if [ "$is_macos" = true ]; then
-    clang -g -O0 $include_paths $library_paths -DGLFW_INCLUDE_VULKAN main.c bin/glfw.a -framework Cocoa -framework IOKit -Wl,-rpath,$vulkan_sdk_platform/lib -lvulkan
+    moltenvk_driver="$vulkan_sdk_platform/share/vulkan/icd.d/MoltenVK_icd.json"
+    defines="$defines -DVULKAN_DRIVER_FILES=\"$moltenvk_driver\""
+    clang -g -O0 $include_paths $library_paths $defines main.c bin/glfw.a -framework Cocoa -framework IOKit -lvulkan -Wl,-rpath,$vulkan_sdk_platform/lib
 else
     gcc -g -O0 $include_paths $library_paths $defines main.c bin/glfw.a -lm -lvulkan -Wl,--disable-new-dtags,-rpath=$vulkan_sdk_platform/lib
 fi

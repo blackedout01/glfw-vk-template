@@ -1,4 +1,4 @@
-:: Original source: https://github.com/blackedout01/glfw-vk-template
+:: Original source in https://github.com/blackedout01/glfw-vk-template
 
 :: This is free and unencumbered software released into the public domain.
 :: Anyone is free to copy, modify, publish, use, compile, sell, or distribute

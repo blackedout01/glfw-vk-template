@@ -1,3 +1,25 @@
+// Original source in https://github.com/blackedout01/glfw-vk-template
+//
+// zlib License
+//
+// (C) 2024 blackedout01
+//
+// This software is provided 'as-is', without any express or implied
+// warranty.  In no event will the authors be held liable for any damages
+// arising from the use of this software.
+//
+// Permission is granted to anyone to use this software for any purpose,
+// including commercial applications, and to alter it and redistribute it
+// freely, subject to the following restrictions:
+//
+// 1. The origin of this software must not be misrepresented; you must not
+//    claim that you wrote the original software. If you use this software
+//    in a product, an acknowledgment in the product documentation would be
+//    appreciated but is not required.
+// 2. Altered source versions must be plainly marked as such, and must not be
+//    misrepresented as being the original software.
+// 3. This notice may not be removed or altered from any source distribution.
+
 #include "vulkan/vulkan.h"
 #include "vulkan/vk_enum_string_helper.h"
 
@@ -1073,7 +1095,7 @@ static int VulkanCreateInstance(const char **PlatformRequiredInstanceExtensions,
 #endif
 
 #ifdef VULKAN_INFO_PRINT
-        printf("Vulkan Instance Extensions (%d):\n", InstanceExtensionCount);
+        printf("Vulkan instance extensions (%d):\n", InstanceExtensionCount);
         for(uint32_t I = 0; I < InstanceExtensionCount; ++I) {
             printf("[%d] %s%s\n", I, InstanceExtensions[I], (I < PlatformRequiredInstanceExtensionCount)? " (platform)" : "");
         }

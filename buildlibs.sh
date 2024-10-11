@@ -1,4 +1,4 @@
-# Original source: https://github.com/blackedout01/glfw-vk-template
+# Original source in https://github.com/blackedout01/glfw-vk-template
 #
 # This is free and unencumbered software released into the public domain.
 # Anyone is free to copy, modify, publish, use, compile, sell, or distribute
@@ -21,32 +21,23 @@
 #
 # For more information, please refer to https://unlicense.org
 
-vulkan_sdk="/home/kilian/VulkanSDK"
+vulkan_sdk="/Applications/VulkanSDK"
 
 mkdir -p bin
 
-# Retrieve if platform is macOS
+# Argument for sed: set Vulkan SDK path in build.sh (double quotes allow for variables while single quotes don't, the escaping is done for sh)
+sed_arg="s@vulkan_sdk=\"[^\"]*\"@vulkan_sdk=\"$vulkan_sdk\"@g"
+
 if [ "$(uname)" = "Darwin" ]; then
     is_macos=true
-    sed_i="-i ''"
+    sed_i=$'\0'
     vulkan_sdk_platform="$vulkan_sdk/macOS"
+    sed -i '' $sed_arg build.sh
 else
     is_macos=false
-    sed_i=-i
+    sed_i=
     vulkan_sdk_platform="$vulkan_sdk/x86_64"
-fi
-
-# Set Vulkan SDK path in build.sh (double quotes allow for variables while single quotes don't, the escaping is done for sh)
-sed $sed_i "s@vulkan_sdk=\"[^\"]*\"@vulkan_sdk=\"$vulkan_sdk\"@g" build.sh
-
-# Vulkan (macOS only) - https://gist.github.com/Resparing/d30634fcd533ec5b3235791b21265850 (2024-07-03)
-if [ "$is_macos" = true ]; then
-    # Copy .json files
-    dirname="vulkan/explicit_layer.d" && mkdir -p $dirname && cp $vulkan_sdk_platform/share/$dirname/*.json $dirname/
-    dirname="vulkan/icd.d" && mkdir -p $dirname && cp $vulkan_sdk_platform/share/$dirname/*.json $dirname/
-
-    # Remove relative paths (sed -i backup_extension 's@regex@replacement@g' file)
-    sed $sed_i 's@\.\.\/\.\.\/\.\.\/lib\/lib@lib@g' vulkan/*/*.json
+    sed -i $sed_arg build.sh
 fi
 
 # GLFW
