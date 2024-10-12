@@ -21,7 +21,7 @@
 #
 # For more information, please refer to https://unlicense.org
 
-vulkan_sdk="/Applications/VulkanSDK"
+vulkan_sdk="/home/kilian/VulkanSDK"
 
 mkdir -p bin
 
@@ -42,6 +42,7 @@ fi
 
 # GLFW
 glfw_src="glfw/src"
+glfw_dst="bin/glfw.a"
 
 glfw_files_shared="context.c init.c input.c monitor.c platform.c vulkan.c window.c egl_context.c osmesa_context.c null_init.c null_monitor.c null_window.c null_joystick.c"
 
@@ -49,12 +50,11 @@ glfw_files_apple="cocoa_time.c posix_module.c posix_thread.c"
 glfw_files_other="posix_time.c posix_module.c posix_thread.c"
 
 glfw_files_cocoa="cocoa_init.m cocoa_joystick.m cocoa_monitor.m cocoa_window.m nsgl_context.m"
-
 glfw_files_x11="x11_init.c x11_monitor.c x11_window.c xkb_unicode.c glx_context.c posix_poll.c linux_joystick.c"
 glfw_files_wl="wl_init.c wl_monitor.c wl_window.c xkb_unicode.c posix_poll.c linux_joystick.c"
 
 cd $glfw_src
-echo "Compiling GLFW"
+echo "Compiling GLFW into $glfw_dst"
 if [ "$is_macos" = true ]; then
     clang -c -g -O0 -D_GLFW_COCOA $glfw_files_shared $glfw_files_apple $glfw_files_cocoa
 else
@@ -62,22 +62,23 @@ else
 fi
 cd $OLDPWD
 
-ar rc bin/glfw.a $glfw_src/*.o
+ar rc $glfw_dst $glfw_src/*.o
 rm $glfw_src/*.o
 
 # Vulkan Memory Allocator
 if [ -d "VulkanMemoryAllocator" ]; then
     vma_src="VulkanMemoryAllocator/include"
+    vma_dst="bin/vma.a"
 
-    echo "Compiling VulkanMemoryAllocator"
+    echo "Compiling VulkanMemoryAllocator into $vma_dst"
     cd $vma_src
     if [ "$is_macos" = true ]; then
         clang++ -std=c++11 -c -g -O0 -DVMA_IMPLEMENTATION -xc++ "vk_mem_alloc.h" -I"$vulkan_sdk_platform/include"
     else
-        g++ -std=c++11 -c -g -O0 -DVMA_IMPLEMENTATION -xc++ "vk_mem_alloc.h" -I"$vulkan_sdk_platform/include"
+        g++ -std=c++17 -c -g -O0 -DVMA_IMPLEMENTATION -xc++ "vk_mem_alloc.h" -I"$vulkan_sdk_platform/include"
     fi
     cd $OLDPWD
 
-    ar rc bin/vma.a $vma_src/*.o
+    ar rc $vma_dst $vma_src/*.o
     rm $vma_src/*.o
 fi

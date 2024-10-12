@@ -21,35 +21,38 @@
 #
 # For more information, please refer to https://unlicense.org
 
-vulkan_sdk="/Applications/VulkanSDK"
+vulkan_sdk="/home/kilian/VulkanSDK"
 
 if [ "$(uname)" = "Darwin" ]; then
     is_macos=true
     vulkan_sdk_platform="$vulkan_sdk/macOS"
+    vma_libcpp=-lc++
+    libraries="-framework Cocoa -framework IOKit -lvulkan"
 else
     is_macos=false
     vulkan_sdk_platform="$vulkan_sdk/x86_64"
+    vma_libcpp=-lstdc++
+    libraries="-lm -lvulkan"
 fi
 
 include_paths="-I$vulkan_sdk_platform/include -Iglfw/include"
 library_paths="-L$vulkan_sdk_platform/lib"
 defines="-DGLFW_INCLUDE_VULKAN -DVULKAN_EXPLICIT_LAYERS_PATH=\"$vulkan_sdk_platform/share/vulkan/explicit_layer.d\""
 shared_a=bin/glfw.a
-libraries=-lvulkan
 
 if [ -e "bin/vma.a" ]; then
     include_paths="$include_paths -IVulkanMemoryAllocator/include"
     defines="$defines -DVULKAN_USE_VMA"
     shared_a="$shared_a bin/vma.a"
-    libraries="$libraries -lc++"
+    libraries="$libraries $vma_libcpp"
 fi
 
 if [ "$is_macos" = true ]; then
     moltenvk_driver="$vulkan_sdk_platform/share/vulkan/icd.d/MoltenVK_icd.json"
     defines="$defines -DVULKAN_DRIVER_FILES=\"$moltenvk_driver\""
-    clang -g -O0 $include_paths $library_paths $defines main.c $shared_a -framework Cocoa -framework IOKit $libraries -Wl,-rpath,$vulkan_sdk_platform/lib
+    clang -g -O0 $include_paths $library_paths $defines main.c $shared_a $libraries -Wl,-rpath,$vulkan_sdk_platform/lib
 else
-    gcc -g -O0 $include_paths $library_paths $defines main.c $shared_a -lm -lvulkan -Wl,--disable-new-dtags,-rpath=$vulkan_sdk_platform/lib
+    gcc -g -O0 $include_paths $library_paths $defines main.c $shared_a -lm $libraries -Wl,--disable-new-dtags,-rpath=$vulkan_sdk_platform/lib
 fi
 
 # Compile all shaders

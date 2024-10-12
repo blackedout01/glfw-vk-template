@@ -12,8 +12,19 @@
             ],
             "compilerPath": "/usr/bin/clang",
             "cStandard": "c17",
-            "cppStandard": "c++17",
+            "cppStandard": "c++11",
             "intelliSenseMode": "macos-clang-arm64"
+        },
+        {
+            "name": "Linux",
+            "includePath": [
+                "${workspaceFolder}/**",
+                "/home/kilian/VulkanSDK/x86_64/include"
+            ],
+            "compilerPath": "/usr/bin/gcc",
+            "cStandard": "c17",
+            "cppStandard": "c++17",
+            "intelliSenseMode": "linux-gcc-x64"
         }
     ],
     "version": 4
