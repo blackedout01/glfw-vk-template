@@ -35,6 +35,29 @@ static const char *VULKAN_REQUESTED_INSTANCE_LAYERS[] = {
     "VK_LAYER_KHRONOS_validation"
 };
 
+#ifdef VULKAN_USE_VMA
+#include "vk_mem_alloc.h"
+
+typedef struct {
+    const char *VulkanName;
+    VmaAllocatorCreateFlagBits VmaBit;
+} vma_extension_mapping;
+
+// NOTE(blackedout): All of these are device extensions
+static vma_extension_mapping VmaExtensionMap[] = {
+    { "VK_KHR_dedicated_allocation", VMA_ALLOCATOR_CREATE_KHR_DEDICATED_ALLOCATION_BIT },
+    { "VK_KHR_bind_memory2", VMA_ALLOCATOR_CREATE_KHR_BIND_MEMORY2_BIT },
+    { "VK_KHR_maintenance4", VMA_ALLOCATOR_CREATE_KHR_MAINTENANCE4_BIT },
+    { "VK_KHR_maintenance5", VMA_ALLOCATOR_CREATE_KHR_MAINTENANCE5_BIT },
+    { "VK_EXT_memory_budget", VMA_ALLOCATOR_CREATE_EXT_MEMORY_BUDGET_BIT },
+    { "VK_KHR_buffer_device_address", VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT },
+    { "VK_EXT_memory_priority", VMA_ALLOCATOR_CREATE_EXT_MEMORY_PRIORITY_BIT },
+    { "VK_AMD_device_coherent_memory", VMA_ALLOCATOR_CREATE_AMD_DEVICE_COHERENT_MEMORY_BIT },
+    // TOOD(blackedout): Not available in v3.1.0?
+    //{ "VK_KHR_external_memory_win32", VMA_ALLOCATOR_CREATE_KHR_EXTERNAL_MEMORY_WIN32_BIT }
+};
+#endif
+
 typedef struct {
     VkDevice Handle;
     VkSurfaceKHR Surface;
@@ -53,6 +76,10 @@ typedef struct {
 
     VkFormat BestDepthFormat;
     VkSampleCountFlagBits MaxSampleCount;
+
+#ifdef VULKAN_USE_VMA
+    VmaAllocator Allocator;
+#endif
 } vulkan_surface_device;
 
 typedef struct {
@@ -1020,7 +1047,7 @@ label_Buffers:
 }
 
 // MARK: Instace
-static int VulkanCreateInstance(const char **PlatformRequiredInstanceExtensions, uint32_t PlatformRequiredInstanceExtensionCount, VkInstance *Instance) {
+static int VulkanCreateInstance(const char **PlatformRequiredInstanceExtensions, uint32_t PlatformRequiredInstanceExtensionCount, uint32_t ApiVersion, VkInstance *Instance) {
     {
         const char *InstanceExtensions[16];
         // NOTE(blackedout): Leave room for additional 1 extensions (portability extension)
@@ -1039,7 +1066,7 @@ static int VulkanCreateInstance(const char **PlatformRequiredInstanceExtensions,
             .applicationVersion = VK_MAKE_VERSION(1, 0, 0),
             .pEngineName = "",
             .engineVersion = VK_MAKE_VERSION(1, 0, 0),
-            .apiVersion = VK_API_VERSION_1_3,
+            .apiVersion = ApiVersion,
         };
 
         uint32_t InstanceLayerPropertyCount;
@@ -1124,15 +1151,19 @@ label_Error:
 
 // MARK: Surface Device
 static void VulkanDestroySurfaceDevice(VkInstance Instance, vulkan_surface_device *Device) {
+#ifdef VULKAN_USE_VMA
+    vmaDestroyAllocator(Device->Allocator);
+#endif
     vkDestroySurfaceKHR(Instance, Device->Surface, 0);
     vkDestroyDevice(Device->Handle, 0);
 }
 
-static int VulkanCreateSurfaceDevice(VkInstance Instance, VkSurfaceKHR Surface, vulkan_surface_device *Device) {
+static int VulkanCreateSurfaceDevice(VkInstance Instance, VkSurfaceKHR Surface, uint32_t ApiVersion, vulkan_surface_device *Device) {
     // NOTE(blackedout): This function will destroy the input surface on failure.
     // Returns a device whose physical device has at least one graphics queue, at least one surface presentation queue and supports the surface extension.
     // The physical device is picked by scoring its type, available surface formats and present modes.
 
+    VkDevice DeviceHandle = VULKAN_NULL_HANDLE;
     {    
         VkPhysicalDevice PhysicalDevices[16];
         uint32_t PhysicalDeviceScores[ArrayCount(PhysicalDevices)];
@@ -1145,16 +1176,20 @@ static int VulkanCreateSurfaceDevice(VkInstance Instance, VkSurfaceKHR Surface, 
         int BestPhysicalDeviceHasPortabilitySubsetExtension;
         VkSurfaceFormatKHR BestPhysicalDeviceInitialSurfaceFormat;
         VkPhysicalDeviceProperties BestPhysicalDeviceProperties;
-        VkPhysicalDeviceFeatures BestPhysicalDeviceFeatures;
+        VkPhysicalDeviceFeatures2 BestPhysicalDeviceFeatures;
         VkFormat BestPhysicalDeviceDepthFormat;
+#ifdef VULKAN_USE_VMA
+        VmaAllocationCreateFlags BestPhysicalDeviceVmaCreateFlags;
+#endif
 
         uint32_t BestPhysicalDeviceScore = 0;
         VkPhysicalDevice BestPhysicalDevice = PhysicalDevices[0];
         for(uint32_t I = 0; I < PhysicalDeviceCount; ++I) {
             VkPhysicalDevice PhysicalDevice = PhysicalDevices[I];
 
-            VkPhysicalDeviceFeatures Features;
-            vkGetPhysicalDeviceFeatures(PhysicalDevice, &Features);
+            VkPhysicalDeviceFeatures2 Features = {};
+            Features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+            vkGetPhysicalDeviceFeatures2(PhysicalDevice, &Features);
             VkPhysicalDeviceProperties Props;
             vkGetPhysicalDeviceProperties(PhysicalDevice, &Props);        
 
@@ -1193,15 +1228,28 @@ static int VulkanCreateSurfaceDevice(VkInstance Instance, VkSurfaceKHR Surface, 
 
             int HasSwapchainExtension = 0;
             int HasPortabilitySubsetExtension = 0;
+#ifdef VULKAN_USE_VMA
+            VmaAllocatorCreateFlags VmaCreateFlags = 0;
+#endif
             for(uint32_t J = 0; J < ExtensionPropertyCount; ++J) {
-                if(strcmp(ExtensionProperties[J].extensionName, VK_KHR_SWAPCHAIN_EXTENSION_NAME) == 0) {
+                const char *ExtensionName = ExtensionProperties[J].extensionName;
+                if(strcmp(ExtensionName, VK_KHR_SWAPCHAIN_EXTENSION_NAME) == 0) {
                     HasSwapchainExtension = 1;
                 }
 
                 // NOTE(blackedout): This is done to remove a Vulkan warning.
-                if(strcmp(ExtensionProperties[J].extensionName, "VK_KHR_portability_subset") == 0) {
+                if(strcmp(ExtensionName, "VK_KHR_portability_subset") == 0) {
                     HasPortabilitySubsetExtension = 1;
                 }
+
+#ifdef VULKAN_USE_VMA
+                // NOTE(blackedout): Check if extension is part of the vma extensions, so that vma can be told that it will be enabled
+                for(uint32_t K = 0; K < ArrayCount(VmaExtensionMap); ++K) {
+                    if(strcmp(ExtensionName, VmaExtensionMap[K].VulkanName) == 0) {
+                        VmaCreateFlags |= VmaExtensionMap[K].VmaBit;
+                    }
+                }
+#endif
             }
             IsUsable = IsUsable && HasSwapchainExtension;
 
@@ -1239,7 +1287,7 @@ static int VulkanCreateSurfaceDevice(VkInstance Instance, VkSurfaceKHR Surface, 
             IsUsable = IsUsable && HasBestDepthFormat;
 
             uint32_t FeatureScore = 0;
-            if(Features.samplerAnisotropy) {
+            if(Features.features.samplerAnisotropy) {
                 ++FeatureScore;
             }
 
@@ -1259,12 +1307,16 @@ static int VulkanCreateSurfaceDevice(VkInstance Instance, VkSurfaceKHR Surface, 
                     BestPhysicalDeviceProperties = Props;
                     BestPhysicalDeviceFeatures = Features;
                     BestPhysicalDeviceDepthFormat = BestDepthFormat;
+
+#ifdef VULKAN_USE_VMA
+                    BestPhysicalDeviceVmaCreateFlags = VmaCreateFlags;
+#endif
                 }
             }
             PhysicalDeviceScores[I] = Score;
         }
 
-    #ifdef VULKAN_INFO_PRINT
+#ifdef VULKAN_INFO_PRINT
         printf("Vulkan physical devices (%d):\n", PhysicalDeviceCount);
         for(uint32_t I = 0; I < PhysicalDeviceCount; ++I) {
             VkPhysicalDeviceProperties Props;
@@ -1274,7 +1326,7 @@ static int VulkanCreateSurfaceDevice(VkInstance Instance, VkSurfaceKHR Surface, 
             //printf("\tSurface image count range: %d to %d\n", SurfaceCapabilities.minImageCount, SurfaceCapabilities.maxImageCount);
             //printf("\tSurface image extents: (%d, %d) to (%d, %d)\n", SurfaceCapabilities.minImageExtent.width, SurfaceCapabilities.minImageExtent.height, SurfaceCapabilities.maxImageExtent.width, SurfaceCapabilities.maxImageExtent.height);
         }
-    #endif
+#endif
 
         AssertMessageGoto(BestPhysicalDeviceScore > 0, label_Error, "No usable physical device found.\n");
 
@@ -1307,27 +1359,65 @@ static int VulkanCreateSurfaceDevice(VkInstance Instance, VkSurfaceKHR Surface, 
             ExtensionNameCount -= 1;
         }
 
+        uint32_t FinalExtensionNameCount = 0;
+
         // NOTE(blackedout): Disable all features by default first, then enable using supported features
-        VkPhysicalDeviceFeatures PhysicalDeviceFeatures = {0};
-        PhysicalDeviceFeatures.samplerAnisotropy = BestPhysicalDeviceFeatures.samplerAnisotropy;
+        VkPhysicalDeviceFeatures2 PhysicalDeviceFeatures = {
+            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
+            .pNext = 0,
+            .features = {}
+        };
+        PhysicalDeviceFeatures.features.samplerAnisotropy = BestPhysicalDeviceFeatures.features.samplerAnisotropy;
+
+#ifdef VULKAN_USE_VMA
+        const char *FinalExtensionNames[ArrayCount(ExtensionNames) + ArrayCount(VmaExtensionMap)];
+        for(uint32_t I = 0; I < ExtensionNameCount; ++I, ++FinalExtensionNameCount) {
+            FinalExtensionNames[I] = ExtensionNames[I];
+        }
+        for(uint32_t I = 0; I < ArrayCount(VmaExtensionMap); ++I) {
+            if(BestPhysicalDeviceVmaCreateFlags & VmaExtensionMap[I].VmaBit) {
+                FinalExtensionNames[FinalExtensionNameCount++] = VmaExtensionMap[I].VulkanName;
+            }
+        }
+
+        if(BestPhysicalDeviceVmaCreateFlags & VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT) {
+                VkPhysicalDeviceBufferDeviceAddressFeaturesKHR FeatureBufferDeviceAddress = {
+                .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES_KHR,
+                .pNext = 0,
+                .bufferDeviceAddress = VK_TRUE,
+                .bufferDeviceAddressCaptureReplay = VK_FALSE,
+                .bufferDeviceAddressMultiDevice = VK_FALSE,
+            };
+            PhysicalDeviceFeatures.pNext = &FeatureBufferDeviceAddress;
+        }
+#else
+        const char *FinalExtensionNames = ExtensionNames;
+        FinalExtensionNameCount = ExtensionNameCount;
+#endif
 
         VkDeviceCreateInfo DeviceCreateInfo = {
             .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
-            .pNext = 0,
+            .pNext = &PhysicalDeviceFeatures,
             .flags = 0,
             .queueCreateInfoCount = DeviceQueueCreateInfoCount,
             .pQueueCreateInfos = DeviceQueueCreateInfos,
             .enabledLayerCount = 0,
             .ppEnabledLayerNames = 0,
-            .enabledExtensionCount = ExtensionNameCount,
-            .ppEnabledExtensionNames = ExtensionNames,
-            .pEnabledFeatures = &PhysicalDeviceFeatures,
+            .enabledExtensionCount = FinalExtensionNameCount,
+            .ppEnabledExtensionNames = FinalExtensionNames,
+            .pEnabledFeatures = 0,
         };
+
+#ifdef VULKAN_INFO_PRINT
+        printf("Vulkan enabled device extensions (%d):\n", DeviceCreateInfo.enabledExtensionCount);
+        for(uint32_t I = 0; I < DeviceCreateInfo.enabledExtensionCount; ++I) {
+            printf("[%d] %s\n", I, DeviceCreateInfo.ppEnabledExtensionNames[I]);
+        }
+#endif
 
         VkSurfaceCapabilitiesKHR BestPhysicalDeviceSurfaceCapabilities;
         VulkanCheckGoto(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(BestPhysicalDevice, Surface, &BestPhysicalDeviceSurfaceCapabilities), label_Error);
 
-        VkDevice DeviceHandle;
         VulkanCheckGoto(vkCreateDevice(BestPhysicalDevice, &DeviceCreateInfo, 0, &DeviceHandle), label_Error);
 
         VkSampleCountFlags PossibleSampleCountFlags = BestPhysicalDeviceProperties.limits.sampledImageColorSampleCounts & BestPhysicalDeviceProperties.limits.sampledImageDepthSampleCounts;
@@ -1338,6 +1428,23 @@ static int VulkanCreateSurfaceDevice(VkInstance Instance, VkSurfaceKHR Surface, 
                 break;
             }
         }
+
+#ifdef VULKAN_USE_VMA
+        VmaAllocatorCreateInfo AllocatorCreateInfo = {
+            .flags = BestPhysicalDeviceVmaCreateFlags,
+            .physicalDevice = BestPhysicalDevice,
+            .device = DeviceHandle,
+            .preferredLargeHeapBlockSize = 0,
+            .pAllocationCallbacks = 0,
+            .pDeviceMemoryCallbacks = 0,
+            .pHeapSizeLimit = 0,
+            .pVulkanFunctions = 0,
+            .instance = Instance,
+            .vulkanApiVersion = ApiVersion
+        };
+        VmaAllocator Allocator;
+        VulkanCheckGoto(vmaCreateAllocator(&AllocatorCreateInfo, &Allocator), label_Device);
+#endif
 
         vulkan_surface_device LocalSurfaceDevice = {
             .Handle = DeviceHandle,
@@ -1350,11 +1457,15 @@ static int VulkanCreateSurfaceDevice(VkInstance Instance, VkSurfaceKHR Surface, 
             .InitialExtent = BestPhysicalDeviceSurfaceCapabilities.currentExtent,
             .InitialSurfaceFormat = BestPhysicalDeviceInitialSurfaceFormat,
 
-            .Features = BestPhysicalDeviceFeatures,
+            .Features = BestPhysicalDeviceFeatures.features,
             .Properties = BestPhysicalDeviceProperties,
 
             .BestDepthFormat = BestPhysicalDeviceDepthFormat,
-            .MaxSampleCount = MaxPhysicalDeviceSampleCount
+            .MaxSampleCount = MaxPhysicalDeviceSampleCount,
+
+#ifdef VULKAN_USE_VMA
+            .Allocator = Allocator
+#endif
         };
 
         *Device = LocalSurfaceDevice;
@@ -1362,6 +1473,8 @@ static int VulkanCreateSurfaceDevice(VkInstance Instance, VkSurfaceKHR Surface, 
 
     return 0;
 
+label_Device:
+    vkDestroyDevice(DeviceHandle, 0);
 label_Error:
     vkDestroySurfaceKHR(Instance, Surface, 0);
     Surface = 0;

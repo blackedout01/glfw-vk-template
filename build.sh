@@ -34,13 +34,22 @@ fi
 include_paths="-I$vulkan_sdk_platform/include -Iglfw/include"
 library_paths="-L$vulkan_sdk_platform/lib"
 defines="-DGLFW_INCLUDE_VULKAN -DVULKAN_EXPLICIT_LAYERS_PATH=\"$vulkan_sdk_platform/share/vulkan/explicit_layer.d\""
+shared_a=bin/glfw.a
+libraries=-lvulkan
+
+if [ -e "bin/vma.a" ]; then
+    include_paths="$include_paths -IVulkanMemoryAllocator/include"
+    defines="$defines -DVULKAN_USE_VMA"
+    shared_a="$shared_a bin/vma.a"
+    libraries="$libraries -lc++"
+fi
 
 if [ "$is_macos" = true ]; then
     moltenvk_driver="$vulkan_sdk_platform/share/vulkan/icd.d/MoltenVK_icd.json"
     defines="$defines -DVULKAN_DRIVER_FILES=\"$moltenvk_driver\""
-    clang -g -O0 $include_paths $library_paths $defines main.c bin/glfw.a -framework Cocoa -framework IOKit -lvulkan -Wl,-rpath,$vulkan_sdk_platform/lib
+    clang -g -O0 $include_paths $library_paths $defines main.c $shared_a -framework Cocoa -framework IOKit $libraries -Wl,-rpath,$vulkan_sdk_platform/lib
 else
-    gcc -g -O0 $include_paths $library_paths $defines main.c bin/glfw.a -lm -lvulkan -Wl,--disable-new-dtags,-rpath=$vulkan_sdk_platform/lib
+    gcc -g -O0 $include_paths $library_paths $defines main.c $shared_a -lm -lvulkan -Wl,--disable-new-dtags,-rpath=$vulkan_sdk_platform/lib
 fi
 
 # Compile all shaders

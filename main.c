@@ -99,12 +99,13 @@ int main() {
         }
         AssertMessageGoto(glfwVulkanSupported(), label_TerminateGLFW, "GLFW says Vulkan is not supported on this platform.\n");
 
+        uint32_t VulkanApiVersion = VK_API_VERSION_1_3;
         {
             uint32_t RequiredInstanceExtensionCount;
             const char **RequiredInstanceExtensionsGLFW = glfwGetRequiredInstanceExtensions(&RequiredInstanceExtensionCount);
             AssertMessageGoto(RequiredInstanceExtensionsGLFW, label_TerminateGLFW, "GLFW didn't return any Vulkan extensions. On macOS this might be because MoltenVK is not linked correctly.\n");
 
-            CheckGoto(VulkanCreateInstance(RequiredInstanceExtensionsGLFW, RequiredInstanceExtensionCount, &VulkanInstance), label_TerminateGLFW);
+            CheckGoto(VulkanCreateInstance(RequiredInstanceExtensionsGLFW, RequiredInstanceExtensionCount, VulkanApiVersion, &VulkanInstance), label_TerminateGLFW);
         }
 
         glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
@@ -130,7 +131,7 @@ int main() {
             VulkanCheckGoto(glfwCreateWindowSurface(VulkanInstance, Context.Window, 0, &VulkanSurface), label_DestroyVulkanInstance);
             
             // NOTE(blackedout): The surface is freed inside of this function on failure.
-            CheckGoto(VulkanCreateSurfaceDevice(VulkanInstance, VulkanSurface, &VulkanSurfaceDevice), label_DestroyVulkanInstance);
+            CheckGoto(VulkanCreateSurfaceDevice(VulkanInstance, VulkanSurface, VulkanApiVersion, &VulkanSurfaceDevice), label_DestroyVulkanInstance);
         }
 
         {

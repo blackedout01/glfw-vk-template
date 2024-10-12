@@ -64,3 +64,20 @@ cd $OLDPWD
 
 ar rc bin/glfw.a $glfw_src/*.o
 rm $glfw_src/*.o
+
+# Vulkan Memory Allocator
+if [ -d "VulkanMemoryAllocator" ]; then
+    vma_src="VulkanMemoryAllocator/include"
+
+    echo "Compiling VulkanMemoryAllocator"
+    cd $vma_src
+    if [ "$is_macos" = true ]; then
+        clang++ -std=c++11 -c -g -O0 -DVMA_IMPLEMENTATION -xc++ "vk_mem_alloc.h" -I"$vulkan_sdk_platform/include"
+    else
+        g++ -std=c++11 -c -g -O0 -DVMA_IMPLEMENTATION -xc++ "vk_mem_alloc.h" -I"$vulkan_sdk_platform/include"
+    fi
+    cd $OLDPWD
+
+    ar rc bin/vma.a $vma_src/*.o
+    rm $vma_src/*.o
+fi

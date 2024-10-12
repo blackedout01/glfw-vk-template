@@ -1,5 +1,6 @@
 ## glfw-vk-template
 A GLFW Vulkan template project that is intended to help you in quickly setting up new vulkan projects. No complicated build steps neccessary. Just you and two shell scripts.
+<br/>Note: The usage of the Vulkan Memory Allocator library is optional. It makes memory allocations a lot easier but if you don't need it, just remove it as a submodule (and the directory). The build scripts only compile it if there is a directory `VulkanMemoryAllocator` (buildlibs) and only add it if there is a file `bin/vma.a` or `bin/vma.lib` (build).
 
 ## License
 Build scripts, shader code and `main.c` are public domain. The other files are zlib licensed (because you should really be writing them yourself and also there are probably errors in mine). You can use the VS Code files as you wish too (not even sure what most of the stuff in there means).
@@ -50,7 +51,7 @@ Currently, only x86_64 architecture is supported.
 #### 1. Install the Vulkan SDK and configure `buildlibs.sh`
 Download the SDK as a `.tar.xz` file from https://vulkan.lunarg.com/sdk/home#linux and extract it.
 <br/>In the `buildlibs.sh` file, modify the line that sets the variable `vulkan_sdk` to contain the path to your Vulkan SDK.
-<br/>⚠️ The path should be absolute and reference the directory that contain an `x86_64` subdirectory. For example, if the path of this subdirectory is `/home/me/VulkanSDK/x86_64`, the line needs to be changed to:
+<br/>⚠️ The path should be absolute and reference the directory that contains an `x86_64` subdirectory. For example, if the path of this subdirectory is `/home/me/VulkanSDK/x86_64`, the line needs to be changed to:
 ```
 vulkan_sdk="/home/me/VulkanSDK"
 ```
