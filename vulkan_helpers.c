@@ -1187,7 +1187,8 @@ static int VulkanCreateSurfaceDevice(VkInstance Instance, VkSurfaceKHR Surface, 
         for(uint32_t I = 0; I < PhysicalDeviceCount; ++I) {
             VkPhysicalDevice PhysicalDevice = PhysicalDevices[I];
 
-            VkPhysicalDeviceFeatures2 Features = {};
+            VkPhysicalDeviceFeatures2 Features;
+            SetZero(Features);
             Features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
             vkGetPhysicalDeviceFeatures2(PhysicalDevice, &Features);
             VkPhysicalDeviceProperties Props;
@@ -1362,11 +1363,9 @@ static int VulkanCreateSurfaceDevice(VkInstance Instance, VkSurfaceKHR Surface, 
         uint32_t FinalExtensionNameCount = 0;
 
         // NOTE(blackedout): Disable all features by default first, then enable using supported features
-        VkPhysicalDeviceFeatures2 PhysicalDeviceFeatures = {
-            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
-            .pNext = 0,
-            .features = {}
-        };
+        VkPhysicalDeviceFeatures2 PhysicalDeviceFeatures;
+        SetZero(PhysicalDeviceFeatures);
+        PhysicalDeviceFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
         PhysicalDeviceFeatures.features.samplerAnisotropy = BestPhysicalDeviceFeatures.features.samplerAnisotropy;
 
 #ifdef VULKAN_USE_VMA
@@ -1391,7 +1390,7 @@ static int VulkanCreateSurfaceDevice(VkInstance Instance, VkSurfaceKHR Surface, 
             PhysicalDeviceFeatures.pNext = &FeatureBufferDeviceAddress;
         }
 #else
-        const char *FinalExtensionNames = ExtensionNames;
+        const char **FinalExtensionNames = ExtensionNames;
         FinalExtensionNameCount = ExtensionNameCount;
 #endif
 

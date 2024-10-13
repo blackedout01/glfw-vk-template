@@ -1,6 +1,11 @@
 ## glfw-vk-template
 A GLFW Vulkan template project that is intended to help you in quickly setting up new vulkan projects. No complicated build steps neccessary. Just you and two shell scripts.
+<br/>There are also some VS Code files included for IntelliSense and debugging. However, because it doesn't exactly understand source file inclusion, it seems you have to open `main.c` first and let it parse before allowing the other files to be processed.
+<br/>
 <br/>Note: The usage of the Vulkan Memory Allocator library is optional. It makes memory allocations a lot easier but if you don't need it, just remove it as a submodule (and the directory). The build scripts only compile it if there is a directory `VulkanMemoryAllocator` (buildlibs) and only add it if there is a file `bin/vma.a` or `bin/vma.lib` (build).
+
+GLFW is checked out to release 3.4.
+<br/>VulkanMemoryAllocator is checked out to release v3.1.0.
 
 ## License
 Build scripts, shader code and `main.c` are public domain. The other files are zlib licensed (because you should really be writing them yourself and also there are probably errors in mine). You can use the VS Code files as you wish too (not even sure what most of the stuff in there means).
@@ -35,7 +40,7 @@ sh buildlibs.sh
 ```
 
 #### 4. Compile the program
-The build script compiles the program and links neccesary libaries. The output file is `a.out`. It also compiles the two default shader files into `bin/shaders`.
+The build script compiles the program and links neccesary libaries. The output file is `a.out`, which, for convenience of execution, is not stored in the `bin` directory. The script also compiles the two default shader files into `bin/shaders`.
 ```
 sh build.sh
 ```
@@ -44,6 +49,7 @@ sh build.sh
 ```
 ./a.out
 ```
+Step 4 and 5 can also be done by pressing F5 in VS Code, if the launch configuration "macOS" is selected.
 
 ## Build on Linux (GCC)
 Currently, only x86_64 architecture is supported.
@@ -71,7 +77,7 @@ sh buildlibs.sh
 ```
 
 #### 4. Compile the program
-The build script compiles the program and links neccesary libaries. The output file is `a.out`. It also compiles the two default shader files into `bin/shaders`.
+The build script compiles the program and links neccesary libaries. The output file is `a.out`, which, for convenience of execution, is not stored in the `bin` directory. The script also compiles the two default shader files into `bin/shaders`.
 ```
 sh build.sh
 ```
@@ -80,21 +86,37 @@ sh build.sh
 ```
 ./a.out
 ```
+Step 4 and 5 can also be done by pressing F5 in VS Code, if the launch configuration "Linux" is selected.
 
-## Build on Windows
+## Build on Windows (MSVC)
 
-### Step 0
-Download the latest Vulkan SDK installer for Windows here https://vulkan.lunarg.com/sdk/home#windows and install.
-<br/>Then modify the third line of `build.sh` in this repository such that the variable `vulkan_sdk` contains the path to the root of the Vulkan SDK. For example, if you've installed the SDK into `C:\User\Me\VulkanSDK`, then set the third line to:
+#### 1. Install the Vulkan SDK and configure `buildlibs.bat` and `build.bat`
+Download the SDK installer from https://vulkan.lunarg.com/sdk/home#windows and install.
+<br/>In the `buildlibs.bat` **and** `build.bat` file, modify the line that sets the variable `vulkan_sdk` to contain the path to your Vulkan SDK.
+<br/>⚠️ The path should be absolute and reference the directory that contains an `Include` subdirectory. For example, if the path of this subdirectory is `C:\VulkanSDK\Include`, the line needs to be changed to:
 ```
-set vulkan_sdk=C:\Users\Me\VulkanSDK
+set vulkan_sdk=C:\VulkanSDK
+```
+If you want to use the project in VS Code you should also modify the `includePath` in `.vscode/c_cpp_properties.json` to use the correct Vulkan SDK path.
+
+#### 2. Install your build tools
+You can do this by installing the [Build Tools for Visual Studio 2022](https://visualstudio.microsoft.com/downloads/#build-tools-for-visual-studio-2022). This is not necessary if you have already installed Visual Studio (the IDE, not VS Code).
+<br/>In your list of programs you should now have a directory "Visual Studio 2022" with a special console "x64 Native Tools Command Prompt for VS 2022" which you can use to compile C or C++ using Microsofts cl.exe compiler. I recommend to pin this into your start menu. The following commands have to be executed in this console.
+#### 3. Compile the libraries
+Running the buildlibs script compiles all library source files into one file for each library, e.g. `bin/glfw.lib` for GLFW. You only need to do this once.
+```
+buildlibs.bat
 ```
 
-### MSVC
-**Install Visual Studio Build Tools** https://visualstudio.microsoft.com/downloads/ (under "All Downloads" then "Tools for Visual Studio" and finally at "Build Tools for Visual Studio 2022")
-<br/>**Open "x64 Native Tools Command Prompt for VS 2022" and navigate to repository**
-<br/>**Build all libraries once:** `buildlibs.bat`
-<br/>Now there is a new file `bin\glfw.lib`, which contains the compiled source code of GLFW usable with Windows.
-<br/>**Build project:** `build.bat`
-<br/>This compiles the program and the default shader located in `shaders` (into `bin\shaders`). For convenience of execution, the program is not stored in the `bin` folder.
-<br/>**Run project:** `main`
+#### 4. Compile the program
+The build script compiles the program and links neccesary libaries. The output file is `main.exe`, which, for convenience of execution, is not stored in the `bin` directory. The script also compiles the two default shader files into `bin/shaders`.
+```
+build.bat
+```
+
+#### 5. Run the program
+```
+main
+```
+If you get an error that a Vulkan dll could not be found, make sure to also install the Vulkan runtime from here https://vulkan.lunarg.com/sdk/home#windows using the installer.
+<br/>Step 4 and 5 can also be done by pressing F5 in VS Code, if the launch configuration "Windows" is selected.

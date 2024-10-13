@@ -103,7 +103,9 @@ int main() {
         {
             uint32_t RequiredInstanceExtensionCount;
             const char **RequiredInstanceExtensionsGLFW = glfwGetRequiredInstanceExtensions(&RequiredInstanceExtensionCount);
-            AssertMessageGoto(RequiredInstanceExtensionsGLFW, label_TerminateGLFW, "GLFW didn't return any Vulkan extensions. On macOS this might be because MoltenVK is not linked correctly.\n");
+            AssertMessageGoto(RequiredInstanceExtensionsGLFW, label_TerminateGLFW, "GLFW didn't return any Vulkan extensions.\n"
+            "On macOS this might be because MoltenVK is not linked correctly.\n"
+            "On Windows this might be because your graphics card driver doesn't support Vulkan.\n");
 
             CheckGoto(VulkanCreateInstance(RequiredInstanceExtensionsGLFW, RequiredInstanceExtensionCount, VulkanApiVersion, &VulkanInstance), label_TerminateGLFW);
         }

@@ -33,25 +33,32 @@
 #define Align16(X, Type) ((((Type)(X)) + ((Type)15)) & (~((Type)15)))
 #define AlignAny(X, Type, Alignment) ((((Type)(X)) + ((Type)(Alignment)) - 1) - ((((Type)(X)) + ((Type)(Alignment)) - 1) % ((Type)(Alignment))))
 
+#ifdef _WIN32
+#include <windows.h>
+#define SleepMilliseconds(Value) Sleep(Value)
+
+// NOTE(blackedout): Windows doesn't support colors? :(
+#define CODE_YELLOW ""
+#define CODE_RED ""
+#define CODE_RESET ""
+#else
+#include <unistd.h>
+#define SleepMilliseconds(Value) usleep(1000*(Value))
 #define CODE_YELLOW "\033[0;33m"
 #define CODE_RED "\033[0;31m"
 #define CODE_RESET "\033[0m"
+#endif
+
 #define printfc(Color, Format, ...) printf("%s" Format "%s", Color, ##__VA_ARGS__, CODE_RESET)
 
 #define CheckGoto(Result, Label) if(Result) goto Label
 #define AssertMessage(Condition, Format, ...) if(!(Condition)) { printfc(CODE_RED, Format, ##__VA_ARGS__); }
 #define AssertMessageGoto(Condition, Label, Format, ...) if(!(Condition)) { printfc(CODE_RED, Format, ##__VA_ARGS__); goto Label; }
 
+#define SetZero(Var) memset(&(Var), 0, sizeof(Var))
+
 #ifndef SIZE_T_MAX
 #define SIZE_T_MAX ((size_t)-1)
-#endif
-
-#ifdef _WIN32
-#include <windows.h>
-#define SleepMilliseconds(Value) Sleep(Value)
-#else
-#include <unistd.h>
-#define SleepMilliseconds(Value) usleep(1000*(Value))
 #endif
 
 typedef struct {

@@ -23,13 +23,20 @@
 
 @echo off
 
-set vulkan_sdk=C:\Users\Kilian\VulkanSDK
+set vulkan_sdk=C:\VulkanSDK
+
+set options=/DEBUG /Z7
 
 set include_paths=/I%vulkan_sdk%\Include /Iglfw\include
 set library_paths=/LIBPATH:%vulkan_sdk%\Lib
 
-cl /nologo /DEBUG /Z7 %include_paths% /DGLFW_INCLUDE_VULKAN main.c bin\glfw.lib /link %library_paths% vulkan-1.lib User32.lib Gdi32.lib Shell32.lib
+set libs=bin\glfw.lib
+if exist bin\vma.lib (
+    set libs=%libs% bin\vma.lib
+)
 
+:: Use /std:c++20 if compiling in C++ mode
+cl /nologo %options% %include_paths% /DGLFW_INCLUDE_VULKAN main.c %libs% /link %library_paths% vulkan-1.lib User32.lib Gdi32.lib Shell32.lib
 
 if not exist bin\shaders md bin\shaders
 
