@@ -53,14 +53,14 @@ glfw_files_cocoa="cocoa_init.m cocoa_joystick.m cocoa_monitor.m cocoa_window.m n
 glfw_files_x11="x11_init.c x11_monitor.c x11_window.c xkb_unicode.c glx_context.c posix_poll.c linux_joystick.c"
 glfw_files_wl="wl_init.c wl_monitor.c wl_window.c xkb_unicode.c posix_poll.c linux_joystick.c"
 
-cd $glfw_src
+cd "$glfw_src"
 echo "Compiling GLFW into $glfw_dst"
 if [ "$is_macos" = true ]; then
     clang -c -g -O0 -D_GLFW_COCOA $glfw_files_shared $glfw_files_apple $glfw_files_cocoa
 else
     gcc -c -g -O0 -D_GLFW_X11 $glfw_files_shared $glfw_files_other $glfw_files_x11
 fi
-cd $OLDPWD
+cd "$OLDPWD"
 
 ar rc $glfw_dst $glfw_src/*.o
 rm $glfw_src/*.o
@@ -77,7 +77,7 @@ if [ -d "VulkanMemoryAllocator" ]; then
     else
         g++ -std=c++17 -c -g -O0 -DVMA_IMPLEMENTATION -xc++ "vk_mem_alloc.h" -I"$vulkan_sdk_platform/include"
     fi
-    cd $OLDPWD
+    cd "$OLDPWD"
 
     ar rc $vma_dst $vma_src/*.o
     rm $vma_src/*.o
