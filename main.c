@@ -155,7 +155,7 @@ int main() {
             CheckGoto(ProgramRender(&Context.ProgramContext, &VulkanSurfaceDevice, AcquiredImage), label_IdleDestroyAndExit);
             CheckGoto(VulkanSubmitFinalAndPresent(&VulkanSurfaceDevice, &VulkanSwapchainHandler, VulkanGraphicsQueue, GraphicsCommandBuffer, Context.FramebufferExtent), label_IdleDestroyAndExit);
             
-            //SleepMilliseconds(1000); // NOTE(blackedout): EDITING THIS MIGHT CAUSE IMAGE FLASHING
+            //SleepMilliseconds(1000);
 
             double Time = glfwGetTime();
             DeltaTime = Time - TimeStart;
@@ -169,7 +169,7 @@ int main() {
 label_IdleDestroyAndExit:
     VulkanCheckGoto(vkDeviceWaitIdle(VulkanSurfaceDevice.Handle), label_IdleError);
 label_IdleError:;
-label_DestroySwapchainHandler:
+//label_DestroySwapchainHandler:
     VulkanDestroySwapchainHandler(&VulkanSurfaceDevice, &VulkanSwapchainHandler);
 label_ProgramSetdown:
     ProgramSetdown(&Context.ProgramContext, &VulkanSurfaceDevice);

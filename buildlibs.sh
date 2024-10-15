@@ -21,7 +21,7 @@
 #
 # For more information, please refer to https://unlicense.org
 
-vulkan_sdk="/home/kilian/VulkanSDK"
+vulkan_sdk="/Applications/VulkanSDK"
 
 mkdir -p bin
 

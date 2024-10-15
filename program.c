@@ -198,37 +198,20 @@ static uint32_t CubeIndices[] = {
 };
 
 static void ProgramSetdown(context *Context, vulkan_surface_device *Device) {
-    // NOTE(blackedout): This function is built to be called at any stage of the setup process, meaning any initialization of setup might not have been done yet.
     VkDevice DeviceHandle = Device->Handle;
-    if(Context->GraphicsPipelineLayout) {
-        vkDestroyPipelineLayout(DeviceHandle, Context->GraphicsPipelineLayout, 0);
-    }
-    if(Context->RenderPass) {
-        vkDestroyRenderPass(DeviceHandle, Context->RenderPass, 0);
-    }
-    if(Context->GraphicsPipeline) {
-        vkDestroyPipeline(DeviceHandle, Context->GraphicsPipeline, 0);
-    }
-    if(Context->Shaders.UniformBufferMemory) {
-        DestroyShaders(Device, &Context->Shaders);
-    }
-    if(Context->ImagesInitialized) {
-        VulkanDestroyStaticBuffersAndImages(Device, &Context->StaticBuffers, Context->Images, STATIC_IMAGE_COUNT);
-    }
-    if(Context->GraphicsCommandPool) {
-        vkDestroyCommandPool(DeviceHandle, Context->GraphicsCommandPool, 0);
-    }
+    VulkanDestroyDefaultGraphicsPipeline(Device, Context->GraphicsPipelineLayout, Context->RenderPass, Context->GraphicsPipeline);
+    DestroyShaders(Device, &Context->Shaders);
+    VulkanDestroyStaticBuffersAndImages(Device, &Context->StaticBuffers, Context->Images, STATIC_IMAGE_COUNT);
+    vkDestroyCommandPool(DeviceHandle, Context->GraphicsCommandPool, 0);
 }
 
-static int ProgramSetup(context *Context, vulkan_surface_device *Device, VkCommandBuffer *GraphicsCommandBuffer, VkQueue *GraphicsQueue, VkRenderPass *RenderPass, VkSampleCountFlagBits *SampleCount) {
+static int ProgramSetup(context *Context, vulkan_surface_device *Device, VkCommandBuffer *OutGraphicsCommandBuffer, VkQueue *OutGraphicsQueue, VkRenderPass *OutRenderPass, VkSampleCountFlagBits *OutSampleCount) {
     VkDevice DeviceHandle = Device->Handle;
 
-    context LocalContext = {
-        .CamPol = -0.01f,
-        .CamZoom = 1.0f,
-    };
-
     {
+        Context->CamPol = -0.01f;
+        Context->CamZoom = 1.0f;
+
         // NOTE(blackedout): Create command pools, buffer and get queue
         VkCommandPoolCreateInfo GraphicsCommandPoolCreateInfo = {
             .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
@@ -236,27 +219,26 @@ static int ProgramSetup(context *Context, vulkan_surface_device *Device, VkComma
             .flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
             .queueFamilyIndex = Device->GraphicsQueueFamilyIndex
         };
-        VulkanCheckGoto(vkCreateCommandPool(DeviceHandle, &GraphicsCommandPoolCreateInfo, 0, &LocalContext.GraphicsCommandPool), label_Error);
+        VulkanCheckGoto(vkCreateCommandPool(DeviceHandle, &GraphicsCommandPoolCreateInfo, 0, &Context->GraphicsCommandPool), label_Error);
 
         VkCommandBufferAllocateInfo GraphicsCommandBufferAllocateInfo = {
             .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
             .pNext = 0,
-            .commandPool = LocalContext.GraphicsCommandPool,
+            .commandPool = Context->GraphicsCommandPool,
             .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
             .commandBufferCount = 1,
         };
-        VulkanCheckGoto(vkAllocateCommandBuffers(DeviceHandle, &GraphicsCommandBufferAllocateInfo, &LocalContext.GraphicsCommandBuffer), label_Error);
-
-        vkGetDeviceQueue(DeviceHandle, Device->GraphicsQueueFamilyIndex, 0, &LocalContext.GraphicsQueue);
+        VulkanCheckGoto(vkAllocateCommandBuffers(DeviceHandle, &GraphicsCommandBufferAllocateInfo, &Context->GraphicsCommandBuffer), label_GraphicsCommandPool);
+        vkGetDeviceQueue(DeviceHandle, Device->GraphicsQueueFamilyIndex, 0, &Context->GraphicsQueue);
 
         vulkan_mesh_subbuf MeshSubbufs[] = {
             {
-                .Vertices = { .Source = PlaneVertices, .ByteCount = sizeof(PlaneVertices), .OffsetPointer = &LocalContext.PlaneVerticesByteOffset },
-                .Indices = { .Source = PlaneIndices, .ByteCount = sizeof(PlaneIndices), .OffsetPointer = &LocalContext.PlaneIndicesByteOffset }
+                .Vertices = { .Source = PlaneVertices, .ByteCount = sizeof(PlaneVertices), .OffsetPointer = &Context->PlaneVerticesByteOffset },
+                .Indices = { .Source = PlaneIndices, .ByteCount = sizeof(PlaneIndices), .OffsetPointer = &Context->PlaneIndicesByteOffset }
             },
             {
-                .Vertices = { .Source = CubeVertices, .ByteCount = sizeof(CubeVertices), .OffsetPointer = &LocalContext.CubeVerticesByteOffset },
-                .Indices = { .Source = CubeIndices, .ByteCount = sizeof(CubeIndices), .OffsetPointer = &LocalContext.CubeIndicesByteOffset }
+                .Vertices = { .Source = CubeVertices, .ByteCount = sizeof(CubeVertices), .OffsetPointer = &Context->CubeVerticesByteOffset },
+                .Indices = { .Source = CubeIndices, .ByteCount = sizeof(CubeIndices), .OffsetPointer = &Context->CubeIndicesByteOffset }
             }
         };
 
@@ -274,13 +256,13 @@ static int ProgramSetup(context *Context, vulkan_surface_device *Device, VkComma
         vulkan_image_description StaticImageColor = { .Type = VK_IMAGE_TYPE_2D, .ViewType = VK_IMAGE_VIEW_TYPE_2D, .Format = VK_FORMAT_R8G8B8A8_SRGB, .Width = ArrayCount(ColorImageBytes)/4, .Height = 1, .Depth = 1, .ByteCount = sizeof(ColorImageBytes), .Source = ColorImageBytes };
         vulkan_image_description StaticImageTile = { .Type = VK_IMAGE_TYPE_2D, .ViewType = VK_IMAGE_VIEW_TYPE_2D, .Format = VK_FORMAT_R8G8B8A8_SRGB, .Width = 2, .Height = 2, .Depth = 1, .ByteCount = sizeof(TileImageBytes), .Source = TileImageBytes };
         vulkan_image_description ImageDescriptions[STATIC_IMAGE_COUNT];
-        memset(ImageDescriptions, 0, sizeof(ImageDescriptions));
+        SetZero(ImageDescriptions);
         ImageDescriptions[STATIC_IMAGE_COLOR] = StaticImageColor;
         ImageDescriptions[STATIC_IMAGE_TILE] = StaticImageTile;
-        CheckGoto(VulkanCreateStaticBuffersAndImages(Device, MeshSubbufs, ArrayCount(MeshSubbufs), ImageDescriptions, ArrayCount(LocalContext.Images), LocalContext.GraphicsCommandPool, LocalContext.GraphicsQueue, &LocalContext.StaticBuffers, LocalContext.Images), label_Error);
-        LocalContext.ImagesInitialized = 1;
+        CheckGoto(VulkanCreateStaticBuffersAndImages(Device, MeshSubbufs, ArrayCount(MeshSubbufs), ImageDescriptions, ArrayCount(Context->Images), Context->GraphicsCommandPool, Context->GraphicsQueue, &Context->StaticBuffers, Context->Images), label_GraphicsCommandPool);
+        Context->ImagesInitialized = 1;
 
-        CheckGoto(LoadShaders(Device, &LocalContext.Shaders, LocalContext.Images), label_Error);
+        CheckGoto(LoadShaders(Device, Context->Images, &Context->Shaders), label_StaticBuffersAndImages);
 
         VkVertexInputBindingDescription VertexInputBindingDescription = {
             .binding = 0,
@@ -310,20 +292,24 @@ static int ProgramSetup(context *Context, vulkan_surface_device *Device, VkComma
             .size = sizeof(default_push_constants),
         };
 
-        VkSampleCountFlagBits LocalSampleCount = Min(Device->MaxSampleCount, VK_SAMPLE_COUNT_4_BIT);
-        CheckGoto(VulkanCreateDefaultGraphicsPipeline(Device, LocalContext.Shaders.Default.Vert, LocalContext.Shaders.Default.Frag, Device->InitialExtent, Device->InitialSurfaceFormat.format, LocalSampleCount, PipelineVertexInputStateCreateInfo, LocalContext.Shaders.DescriptorSetLayouts, ArrayCount(LocalContext.Shaders.DescriptorSetLayouts), PushConstantRange, &LocalContext.GraphicsPipelineLayout, &LocalContext.RenderPass, &LocalContext.GraphicsPipeline), label_Error);
+        VkSampleCountFlagBits SampleCount = Min(Device->MaxSampleCount, VK_SAMPLE_COUNT_4_BIT);
+        CheckGoto(VulkanCreateDefaultGraphicsPipeline(Device, Context->Shaders.Default.Vert, Context->Shaders.Default.Frag, Device->InitialExtent, Device->InitialSurfaceFormat.format, SampleCount, PipelineVertexInputStateCreateInfo, Context->Shaders.DescriptorSetLayouts, ArrayCount(Context->Shaders.DescriptorSetLayouts), PushConstantRange, &Context->GraphicsPipelineLayout, &Context->RenderPass, &Context->GraphicsPipeline), label_Shaders);
 
-        *Context = LocalContext;
-        *GraphicsCommandBuffer = LocalContext.GraphicsCommandBuffer;
-        *GraphicsQueue = LocalContext.GraphicsQueue;
-        *RenderPass = LocalContext.RenderPass;
-        *SampleCount = LocalSampleCount;
+        *OutGraphicsCommandBuffer = Context->GraphicsCommandBuffer;
+        *OutGraphicsQueue = Context->GraphicsQueue;
+        *OutRenderPass = Context->RenderPass;
+        *OutSampleCount = SampleCount;
     }
 
     return 0;
     
+label_Shaders:
+    DestroyShaders(Device, &Context->Shaders);
+label_StaticBuffersAndImages:
+    VulkanDestroyStaticBuffersAndImages(Device, &Context->StaticBuffers, Context->Images, STATIC_IMAGE_COUNT);
+label_GraphicsCommandPool:
+    vkDestroyCommandPool(DeviceHandle, Context->GraphicsCommandPool, 0);
 label_Error:
-    ProgramSetdown(&LocalContext, Device);
     return 1;
 }
 

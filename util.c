@@ -226,7 +226,7 @@ typedef struct {
     uint64_t ByteCount;
 } malloc_multiple_subbuf;
 
-static int MallocMultiple(int Count, malloc_multiple_subbuf *Subbufs, void **Result) {
+static int MallocMultiple(int Count, malloc_multiple_subbuf *Subbufs, void **OutResult) {
     uint64_t ByteCountSum = 0;
     for(int I = 0; I < Count; ++I) {
         uint64_t ByteOffset = ByteCountSum;
@@ -234,24 +234,24 @@ static int MallocMultiple(int Count, malloc_multiple_subbuf *Subbufs, void **Res
         Subbufs[I].ByteCount = ByteOffset;
     }
 
-    uint8_t *LocalResult = (uint8_t *)malloc(ByteCountSum);
-    if(LocalResult == 0) {
+    uint8_t *Result = (uint8_t *)malloc(ByteCountSum);
+    if(Result == 0) {
         printf("Out of memory\n");
         return 1;
     }
 
     for(int I = 0; I < Count; ++I) {
         void **Write = (void **)Subbufs[I].Pointer; // NOTE(blackedout): Otherwise there are compiler issues when initializing the subbufs
-        *Write = (void *)(LocalResult + Subbufs[I].ByteCount);
+        *Write = (void *)(Result + Subbufs[I].ByteCount);
     }
-    *Result = (void * *)LocalResult;
+    *OutResult = (void **)Result;
     return 0;
 }
 
-static int LoadFileContentsCStd(const char *Filepath, uint8_t **FileBytes, uint64_t *FileByteCount) {
+static int LoadFileContentsCStd(const char *Filepath, uint8_t **OutFileBytes, uint64_t *OutFileByteCount) {
     int Result = 1;
-    long int LocalFileByteCount = 0;
-    uint8_t *LocalFileBytes = 0;
+    long int FileByteCount = 0;
+    uint8_t *FileBytes = 0;
 
     FILE *File = fopen(Filepath, "rb");
     AssertMessageGoto(File, label_Exit, "File '%s' could not be opened (code %d).\n", Filepath, errno);
@@ -261,26 +261,26 @@ static int LoadFileContentsCStd(const char *Filepath, uint8_t **FileBytes, uint6
         goto label_FileOpen;
     }
 
-    LocalFileByteCount = ftell(File);
-    AssertMessageGoto(LocalFileByteCount != -1L, label_FileOpen, "ftell failed for file '%s' (code %d).\n", Filepath, errno);
+    FileByteCount = ftell(File);
+    AssertMessageGoto(FileByteCount != -1L, label_FileOpen, "ftell failed for file '%s' (code %d).\n", Filepath, errno);
     rewind(File);
 
-    LocalFileBytes = (uint8_t *)malloc(LocalFileByteCount + 1);
-    AssertMessageGoto(LocalFileBytes != 0, label_FileOpen, "File '%s' could not be read: out of memory.\n", Filepath);
-    LocalFileBytes[LocalFileByteCount] = 0;
+    FileBytes = (uint8_t *)malloc(FileByteCount + 1);
+    AssertMessageGoto(FileBytes != 0, label_FileOpen, "File '%s' could not be read: out of memory.\n", Filepath);
+    FileBytes[FileByteCount] = 0;
 
-    if(fread(LocalFileBytes, 1, LocalFileByteCount, File) != (size_t)LocalFileByteCount) {
+    if(fread(FileBytes, 1, FileByteCount, File) != (size_t)FileByteCount) {
         printf("File '%s' failed to read.\n", Filepath);
-        goto label_FileOpen;
+        goto label_Memory;
     }
 
-    *FileByteCount = (uint64_t)LocalFileByteCount;
-    *FileBytes = LocalFileBytes;
+    *OutFileByteCount = (uint64_t)FileByteCount;
+    *OutFileBytes = FileBytes;
     Result = 0;
     goto label_FileOpen;
 
 label_Memory:
-    free(LocalFileBytes);
+    free(FileBytes);
 label_FileOpen:
     fclose(File);
 label_Exit:

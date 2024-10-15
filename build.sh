@@ -21,7 +21,7 @@
 #
 # For more information, please refer to https://unlicense.org
 
-vulkan_sdk="/home/kilian/VulkanSDK"
+vulkan_sdk="/Applications/VulkanSDK"
 
 if [ "$(uname)" = "Darwin" ]; then
     is_macos=true
@@ -50,9 +50,9 @@ fi
 if [ "$is_macos" = true ]; then
     moltenvk_driver="$vulkan_sdk_platform/share/vulkan/icd.d/MoltenVK_icd.json"
     defines="$defines -DVULKAN_DRIVER_FILES=\"$moltenvk_driver\""
-    clang -g -O0 $include_paths $library_paths $defines main.c $shared_a $libraries -Wl,-rpath,$vulkan_sdk_platform/lib
+    clang -g -O0 -Wall $include_paths $library_paths $defines main.c $shared_a $libraries -Wl,-rpath,$vulkan_sdk_platform/lib
 else
-    gcc -g -O0 $include_paths $library_paths $defines main.c $shared_a -lm $libraries -Wl,--disable-new-dtags,-rpath=$vulkan_sdk_platform/lib
+    gcc -g -O0 -Wall $include_paths $library_paths $defines main.c $shared_a -lm $libraries -Wl,--disable-new-dtags,-rpath=$vulkan_sdk_platform/lib
 fi
 
 # Compile all shaders

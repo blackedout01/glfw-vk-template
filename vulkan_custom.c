@@ -39,18 +39,19 @@ static void DestroyShaders(vulkan_surface_device *Device, shaders *Shaders) {
     memset(Shaders, 0, sizeof(*Shaders));
 }
 
-static int LoadShaders(vulkan_surface_device *Device, shaders *Shaders, vulkan_image *Images) {
+static int LoadShaders(vulkan_surface_device *Device, vulkan_image *Images, shaders *OutShaders) {
     VkDevice DeviceHandle = Device->Handle;
     int Result = 1;
     uint8_t *BytesVS = 0, *BytesFS = 0;
     uint64_t ByteCountVS, ByteCountFS;
-    shaders LocalShaders = {0};
+    shaders Shaders;
+    SetZero(Shaders);
     {
         CheckGoto(LoadFileContentsCStd("bin/shaders/default.vert.spv", &BytesVS, &ByteCountVS), label_Exit);
         CheckGoto(LoadFileContentsCStd("bin/shaders/default.frag.spv", &BytesFS, &ByteCountFS), label_Exit);
 
-        CheckGoto(VulkanCreateShaderModule(Device, BytesVS, ByteCountVS, &LocalShaders.Default.Vert), label_Exit);
-        CheckGoto(VulkanCreateShaderModule(Device, BytesFS, ByteCountFS, &LocalShaders.Default.Frag), label_VS);
+        CheckGoto(VulkanCreateShaderModule(Device, BytesVS, ByteCountVS, &Shaders.Default.Vert), label_Exit);
+        CheckGoto(VulkanCreateShaderModule(Device, BytesFS, ByteCountFS, &Shaders.Default.Frag), label_VS);
 
         // NOTE(blackedout): Create all descriptor set layouts
         VkDescriptorSetLayoutBinding DefaultUniformDescriptorSetLayoutBinding[] = {
@@ -63,19 +64,20 @@ static int LoadShaders(vulkan_surface_device *Device, shaders *Shaders, vulkan_i
         // TODO(blackedout): Why does MSVC have to be so annoying ._. I just want to use array index initializers like in C
         vulkan_descriptor_set_layout_description DescriptorSetDescriptionUniform = { .Flags = 0, .Bindings = DefaultUniformDescriptorSetLayoutBinding, .BindingsCount = ArrayCount(DefaultUniformDescriptorSetLayoutBinding) };
         vulkan_descriptor_set_layout_description DescriptorSetDescriptionSamplerImage = { .Flags = 0, .Bindings = DefaultDescriptorSetLayoutBindings, .BindingsCount = ArrayCount(DefaultDescriptorSetLayoutBindings) };
-        vulkan_descriptor_set_layout_description DescriptorSetDescriptions[DESCRIPTOR_SET_LAYOUT_COUNT] = {0};
+        vulkan_descriptor_set_layout_description DescriptorSetDescriptions[DESCRIPTOR_SET_LAYOUT_COUNT];
+        SetZero(DescriptorSetDescriptions);
         DescriptorSetDescriptions[DESCRIPTOR_SET_LAYOUT_DEFAULT_UNIFORM] = DescriptorSetDescriptionUniform;
         DescriptorSetDescriptions[DESCRIPTOR_SET_LAYOUT_DEFAULT_SAMPLER_IMAGE] = DescriptorSetDescriptionSamplerImage;            
-        CheckGoto(VulkanCreateDescriptorSetLayouts(Device, DescriptorSetDescriptions, ArrayCount(DescriptorSetDescriptions), LocalShaders.DescriptorSetLayouts), label_FS);
+        CheckGoto(VulkanCreateDescriptorSetLayouts(Device, DescriptorSetDescriptions, ArrayCount(DescriptorSetDescriptions), Shaders.DescriptorSetLayouts), label_FS);
         
         // NOTE(blackedout): Create all uniform buffers mapped with unique descriptor set pool and correctly initialized sets
         vulkan_shader_uniform_buffers_description UniformBufferDescriptions[] = {
-            { LocalShaders.UniformMatsBuffers, (void **)LocalShaders.UniformMats, LocalShaders.UniformMatsSets, 0, sizeof(default_uniform_buffer1) }
+            { Shaders.UniformMatsBuffers, (void **)Shaders.UniformMats, Shaders.UniformMatsSets, 0, sizeof(default_uniform_buffer1) }
         };
-        CheckGoto(VulkanCreateShaderUniformBuffers(Device, LocalShaders.DescriptorSetLayouts[DESCRIPTOR_SET_LAYOUT_DEFAULT_UNIFORM], UniformBufferDescriptions,
-                                                    ArrayCount(UniformBufferDescriptions), &LocalShaders.UniformBufferMemory, &LocalShaders.UniformDescriptorPool), label_DescriptorSetLayouts);
-        //StaticAssert(ArrayCount(LocalShaders.UniformBufferDescriptions) == ArrayCount(UniformBufferDescriptions));
-        //memcpy(LocalShaders.UniformBufferDescriptions, UniformBufferDescriptions, sizeof(UniformBufferDescriptions));
+        CheckGoto(VulkanCreateShaderUniformBuffers(Device, Shaders.DescriptorSetLayouts[DESCRIPTOR_SET_LAYOUT_DEFAULT_UNIFORM], UniformBufferDescriptions,
+                                                    ArrayCount(UniformBufferDescriptions), &Shaders.UniformBufferMemory, &Shaders.UniformDescriptorPool), label_DescriptorSetLayouts);
+        //StaticAssert(ArrayCount(Shaders.UniformBufferDescriptions) == ArrayCount(UniformBufferDescriptions));
+        //memcpy(Shaders.UniformBufferDescriptions, UniformBufferDescriptions, sizeof(UniformBufferDescriptions));
 
         VkSamplerCreateInfo DefaultSamplerCreateInfo = {
             .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
@@ -97,7 +99,7 @@ static int LoadShaders(vulkan_surface_device *Device, shaders *Shaders, vulkan_i
             .borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_BLACK,
             .unnormalizedCoordinates = VK_FALSE
         };
-        VulkanCheckGoto(vkCreateSampler(DeviceHandle, &DefaultSamplerCreateInfo, 0, &LocalShaders.DefaultSampler), label_UniformBuffers);
+        VulkanCheckGoto(vkCreateSampler(DeviceHandle, &DefaultSamplerCreateInfo, 0, &Shaders.DefaultSampler), label_UniformBuffers);
 
         VkDescriptorPoolSize DescriptorPoolSizes[] = {
             { .type = VK_DESCRIPTOR_TYPE_SAMPLER, .descriptorCount = 2 },
@@ -111,23 +113,23 @@ static int LoadShaders(vulkan_surface_device *Device, shaders *Shaders, vulkan_i
             .poolSizeCount = ArrayCount(DescriptorPoolSizes),
             .pPoolSizes = DescriptorPoolSizes
         };
-        VulkanCheckGoto(vkCreateDescriptorPool(DeviceHandle, &DescriptorPoolCreateInfo, 0, &LocalShaders.DefaultDescriptorPool), label_Sampler);
+        VulkanCheckGoto(vkCreateDescriptorPool(DeviceHandle, &DescriptorPoolCreateInfo, 0, &Shaders.DefaultDescriptorPool), label_Sampler);
         
         VkDescriptorSetLayout DescriptorSetLayouts[] = {
-            LocalShaders.DescriptorSetLayouts[DESCRIPTOR_SET_LAYOUT_DEFAULT_SAMPLER_IMAGE],
-            LocalShaders.DescriptorSetLayouts[DESCRIPTOR_SET_LAYOUT_DEFAULT_SAMPLER_IMAGE],
+            Shaders.DescriptorSetLayouts[DESCRIPTOR_SET_LAYOUT_DEFAULT_SAMPLER_IMAGE],
+            Shaders.DescriptorSetLayouts[DESCRIPTOR_SET_LAYOUT_DEFAULT_SAMPLER_IMAGE],
         };
         VkDescriptorSetAllocateInfo DescriptorSetAllocateInfo = {
             .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
             .pNext = 0,
-            .descriptorPool = LocalShaders.DefaultDescriptorPool,
+            .descriptorPool = Shaders.DefaultDescriptorPool,
             .descriptorSetCount = ArrayCount(DescriptorSetLayouts),
             .pSetLayouts = DescriptorSetLayouts
         };
         VkDescriptorSet DefaultSets[2];
         VulkanCheckGoto(vkAllocateDescriptorSets(DeviceHandle, &DescriptorSetAllocateInfo, DefaultSets), label_DefaultDescriptorPool);
-        LocalShaders.DefaultImageColorSet = DefaultSets[0];
-        LocalShaders.DefaultImageTileSet = DefaultSets[1];
+        Shaders.DefaultImageColorSet = DefaultSets[0];
+        Shaders.DefaultImageTileSet = DefaultSets[1];
 
         VkImageView ImageViews[2] = { Images[0].ViewHandle, Images[1].ViewHandle };
         for(uint32_t I = 0; I < 2; ++I) {
@@ -137,7 +139,7 @@ static int LoadShaders(vulkan_surface_device *Device, shaders *Shaders, vulkan_i
                 .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
             };
             VkDescriptorImageInfo SamplerInfo = {
-                .sampler = LocalShaders.DefaultSampler,
+                .sampler = Shaders.DefaultSampler,
             };
             VkWriteDescriptorSet WriteDescriptorSets[] = {
                 {
@@ -168,28 +170,28 @@ static int LoadShaders(vulkan_surface_device *Device, shaders *Shaders, vulkan_i
             vkUpdateDescriptorSets(DeviceHandle, ArrayCount(WriteDescriptorSets), WriteDescriptorSets, 0, 0);
         }
 
-        *Shaders = LocalShaders;
+        *OutShaders = Shaders;
     }
 
     Result = 0;
     goto label_Exit;
 
 label_DefaultDescriptorPool:
-    vkDestroyDescriptorPool(DeviceHandle, LocalShaders.DefaultDescriptorPool, 0);
+    vkDestroyDescriptorPool(DeviceHandle, Shaders.DefaultDescriptorPool, 0);
 label_Sampler:
-    vkDestroySampler(DeviceHandle, LocalShaders.DefaultSampler, 0);
+    vkDestroySampler(DeviceHandle, Shaders.DefaultSampler, 0);
 label_UniformBuffers:
-    vkDestroyDescriptorPool(DeviceHandle, LocalShaders.UniformDescriptorPool, 0);
-    vkFreeMemory(DeviceHandle, LocalShaders.UniformBufferMemory, 0);
-    for(uint32_t I = 0; I < ArrayCount(LocalShaders.UniformMatsBuffers); ++I) {
-        vkDestroyBuffer(DeviceHandle, LocalShaders.UniformMatsBuffers[I], 0);
+    vkDestroyDescriptorPool(DeviceHandle, Shaders.UniformDescriptorPool, 0);
+    vkFreeMemory(DeviceHandle, Shaders.UniformBufferMemory, 0);
+    for(uint32_t I = 0; I < ArrayCount(Shaders.UniformMatsBuffers); ++I) {
+        vkDestroyBuffer(DeviceHandle, Shaders.UniformMatsBuffers[I], 0);
     }
 label_DescriptorSetLayouts:
-    VulkanDestroyDescriptorSetLayouts(Device, LocalShaders.DescriptorSetLayouts, ArrayCount(LocalShaders.DescriptorSetLayouts));
+    VulkanDestroyDescriptorSetLayouts(Device, Shaders.DescriptorSetLayouts, ArrayCount(Shaders.DescriptorSetLayouts));
 label_FS:
-    vkDestroyShaderModule(DeviceHandle, LocalShaders.Default.Frag, 0);
+    vkDestroyShaderModule(DeviceHandle, Shaders.Default.Frag, 0);
 label_VS:
-    vkDestroyShaderModule(DeviceHandle, LocalShaders.Default.Vert, 0);
+    vkDestroyShaderModule(DeviceHandle, Shaders.Default.Vert, 0);
 label_Exit:
     free(BytesVS);
     free(BytesFS);
@@ -204,12 +206,12 @@ static void VulkanDestroyDefaultGraphicsPipeline(vulkan_surface_device *Device, 
     vkDestroyPipelineLayout(DeviceHandle, PipelineLayout, 0);
 }
 
-static int VulkanCreateDefaultGraphicsPipeline(vulkan_surface_device *Device, VkShaderModule ModuleVS, VkShaderModule ModuleFS, VkExtent2D InitialExtent, VkFormat SwapchainFormat, VkSampleCountFlagBits SampleCount, VkPipelineVertexInputStateCreateInfo PipelineVertexInputStateCreateInfo, VkDescriptorSetLayout *DescriptorSetLayouts, uint32_t DescriptorSetLayoutCount, VkPushConstantRange PushConstantRange, VkPipelineLayout *PipelineLayout, VkRenderPass *RenderPass, VkPipeline *Pipeline) {
+static int VulkanCreateDefaultGraphicsPipeline(vulkan_surface_device *Device, VkShaderModule ModuleVS, VkShaderModule ModuleFS, VkExtent2D InitialExtent, VkFormat SwapchainFormat, VkSampleCountFlagBits SampleCount, VkPipelineVertexInputStateCreateInfo PipelineVertexInputStateCreateInfo, VkDescriptorSetLayout *DescriptorSetLayouts, uint32_t DescriptorSetLayoutCount, VkPushConstantRange PushConstantRange, VkPipelineLayout *OutPipelineLayout, VkRenderPass *OutRenderPass, VkPipeline *OutPipeline) {
     VkDevice DeviceHandle = Device->Handle;
 
-    VkPipelineLayout LocalPipelineLayout = 0;
-    VkRenderPass LocalRenderPass = 0;
-    VkPipeline LocalPipeline = 0;
+    VkPipelineLayout PipelineLayout = 0;
+    VkRenderPass RenderPass = 0;
+    VkPipeline Pipeline = 0;
     {
         VkPipelineShaderStageCreateInfo PipelineStageCreateInfos[] = {
             {
@@ -353,7 +355,7 @@ static int VulkanCreateDefaultGraphicsPipeline(vulkan_surface_device *Device, Vk
             .pushConstantRangeCount = 1,
             .pPushConstantRanges = &PushConstantRange,
         };
-        VulkanCheckGoto(vkCreatePipelineLayout(DeviceHandle, &PipelineLayoutCreateInfo, 0, &LocalPipelineLayout), label_Error);
+        VulkanCheckGoto(vkCreatePipelineLayout(DeviceHandle, &PipelineLayoutCreateInfo, 0, &PipelineLayout), label_Error);
 
         VkAttachmentDescription AttachmentDescriptions[] = {
             {
@@ -441,7 +443,7 @@ static int VulkanCreateDefaultGraphicsPipeline(vulkan_surface_device *Device, Vk
             .pDependencies = &RenderSubpassDependency,
         };
         
-        VulkanCheckGoto(vkCreateRenderPass(DeviceHandle, &RenderPassCreateInfo, 0, &LocalRenderPass), label_PipelineLayout);
+        VulkanCheckGoto(vkCreateRenderPass(DeviceHandle, &RenderPassCreateInfo, 0, &RenderPass), label_PipelineLayout);
 
         VkGraphicsPipelineCreateInfo GraphicsPipelineCreateInfo = {
             .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
@@ -458,26 +460,26 @@ static int VulkanCreateDefaultGraphicsPipeline(vulkan_surface_device *Device, Vk
             .pDepthStencilState = &PipelineDepthStencilStateCreateInfo,
             .pColorBlendState = &PipelineColorBlendStateCreateInfo,
             .pDynamicState = &PipelineDynamicStateCreateInfo,
-            .layout = LocalPipelineLayout,
-            .renderPass = LocalRenderPass,
+            .layout = PipelineLayout,
+            .renderPass = RenderPass,
             .subpass = 0,
             .basePipelineHandle = VULKAN_NULL_HANDLE,
             .basePipelineIndex = -1
         };
 
-        VulkanCheckGoto(vkCreateGraphicsPipelines(DeviceHandle, VULKAN_NULL_HANDLE, 1, &GraphicsPipelineCreateInfo, 0, &LocalPipeline), label_RenderPass);
+        VulkanCheckGoto(vkCreateGraphicsPipelines(DeviceHandle, VULKAN_NULL_HANDLE, 1, &GraphicsPipelineCreateInfo, 0, &Pipeline), label_RenderPass);
 
-        *PipelineLayout = LocalPipelineLayout;
-        *RenderPass = LocalRenderPass;
-        *Pipeline = LocalPipeline;
+        *OutPipelineLayout = PipelineLayout;
+        *OutRenderPass = RenderPass;
+        *OutPipeline = Pipeline;
     }
 
     return 0;
 
 label_RenderPass:
-    vkDestroyRenderPass(DeviceHandle, LocalRenderPass, 0);
+    vkDestroyRenderPass(DeviceHandle, RenderPass, 0);
 label_PipelineLayout:
-    vkDestroyPipelineLayout(DeviceHandle, LocalPipelineLayout, 0);
+    vkDestroyPipelineLayout(DeviceHandle, PipelineLayout, 0);
 label_Error:
     return 1;
 }
