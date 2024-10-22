@@ -93,4 +93,9 @@ if [ -d "$vma_src" ]; then
 
     ar rc $vma_dst $vma_src/*.o
     rm $vma_src/*.o
+else
+    echo "'$vma_src' does not exist, skipping VulkanMemoryAllocator"
+    if [ -e "$vma_dst" ]; then
+        rm $vma_dst
+    fi
 fi

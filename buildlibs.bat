@@ -68,5 +68,10 @@ if exist %vma_src%\ (
     popd
     lib /nologo %vma_src%\*.obj /out:%vma_dst%
     del %vma_src%\*.obj
+) else (
+    echo '%vma_src%' does not exist, skipping VulkanMemoryAllocator
+    if exist %vma_dst% (
+        del %vma_dst%
+    )
 )
 

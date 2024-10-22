@@ -1470,8 +1470,10 @@ static int VulkanCreateSurfaceDevice(VkInstance Instance, VkSurfaceKHR Surface, 
 
     return 0;
 
+#ifdef VULKAN_USE_VMA
 label_Device:
     vkDestroyDevice(DeviceHandle, 0);
+#endif
 label_Error:
     vkDestroySurfaceKHR(Instance, Surface, 0);
     Surface = 0;
