@@ -40,9 +40,21 @@ else
     sed -i $sed_arg build.sh
 fi
 
+if [ ! -d "$vulkan_sdk_platform" ]; then
+    echo "Vulkan SDK path set incorrectly: '$vulkan_sdk_platform' does not exist."
+    echo "Please specify the correct SDK path."
+    exit 1
+fi
+
 # GLFW
 glfw_src="glfw/src"
 glfw_dst="bin/glfw.a"
+
+if [ ! -d "$glfw_src" ]; then
+    echo "GLFW not cloned."
+    echo "Run 'git submodule update --init' to fix."
+    exit 1
+fi
 
 glfw_files_shared="context.c init.c input.c monitor.c platform.c vulkan.c window.c egl_context.c osmesa_context.c null_init.c null_monitor.c null_window.c null_joystick.c"
 
@@ -66,10 +78,10 @@ ar rc $glfw_dst $glfw_src/*.o
 rm $glfw_src/*.o
 
 # Vulkan Memory Allocator
-if [ -d "VulkanMemoryAllocator" ]; then
-    vma_src="VulkanMemoryAllocator/include"
-    vma_dst="bin/vma.a"
+vma_src="VulkanMemoryAllocator/include"
+vma_dst="bin/vma.a"
 
+if [ -d "$vma_src" ]; then
     echo "Compiling VulkanMemoryAllocator into $vma_dst"
     cd $vma_src
     if [ "$is_macos" = true ]; then

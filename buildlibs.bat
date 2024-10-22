@@ -30,8 +30,21 @@ set options=/DEBUG /Z7
 
 if not exist %bin_path% md %bin_path%
 
+if not exist %vulkan_sdk%\Include\ (
+    echo Vulkan SDK path set incorrectly: '%vulkan_sdk%\Include' does not exist.
+    echo Please specify the correct SDK path.
+    exit /b
+)
+
+:: GLFW
 set glfw_src=glfw\src
 set glfw_dst=bin\glfw.lib
+if not exist %glfw_src%\ (
+    echo GLFW not cloned.
+    echo Run 'git submodule update --init' to fix.
+    exit /b
+)
+
 set glfw_src_shared=context.c init.c input.c monitor.c platform.c vulkan.c window.c egl_context.c osmesa_context.c null_init.c null_monitor.c null_window.c null_joystick.c
 set glfw_src_windows=win32_time.c win32_module.c win32_thread.c
 set glfw_src_win32=win32_init.c win32_joystick.c win32_monitor.c win32_window.c wgl_context.c
@@ -44,10 +57,10 @@ popd
 lib /nologo %glfw_src%\*.obj /out:%glfw_dst%
 del %glfw_src%\*.obj
 
-if exist VulkanMemoryAllocator\ (
-    set vma_src=VulkanMemoryAllocator\include
-    set vma_dst=bin\vma.lib
-
+:: Vulkan Memory Allocator
+set vma_src=VulkanMemoryAllocator\include
+set vma_dst=bin\vma.lib
+if exist %vma_src%\ (
     pushd .
     cd %vma_src%
     echo Compiling VulkanMemoryAllocator into %vma_dst%

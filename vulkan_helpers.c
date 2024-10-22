@@ -1071,7 +1071,7 @@ static int VulkanCreateInstance(const char **PlatformRequiredInstanceExtensions,
         uint32_t InstanceLayerPropertyCount;
         VulkanCheckGoto(vkEnumerateInstanceLayerProperties(&InstanceLayerPropertyCount, 0), label_Error);
 
-        VkLayerProperties InstanceLayerProperties[16];
+        VkLayerProperties InstanceLayerProperties[64];
         AssertMessageGoto(InstanceLayerPropertyCount <= ArrayCount(InstanceLayerProperties), label_Error,
                         "Too many available instance layers (%d). Increase buffer size to fix.", InstanceLayerPropertyCount);
         InstanceLayerPropertyCount = ArrayCount(InstanceLayerProperties);

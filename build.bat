@@ -30,6 +30,12 @@ set options=/DEBUG /Z7
 set include_paths=/I%vulkan_sdk%\Include /Iglfw\include
 set library_paths=/LIBPATH:%vulkan_sdk%\Lib
 
+if not exist %vulkan_sdk%\Include\ (
+    echo Vulkan SDK path set incorrectly: '%vulkan_sdk%\Include' does not exist.
+    echo Please specify the correct SDK path.
+    exit /b
+)
+
 set libs=bin\glfw.lib
 if exist bin\vma.lib (
     set libs=%libs% bin\vma.lib
