@@ -37,12 +37,15 @@ if not exist %vulkan_sdk%\Include\ (
 )
 
 set libs=bin\glfw.lib
+set defines=/DGLFW_INCLUDE_VULKAN
 if exist bin\vma.lib (
     set libs=%libs% bin\vma.lib
+    set defines=%defines% /DVULKAN_USE_VMA
+    set include_paths=%include_paths% /IVulkanMemoryAllocator\include
 )
 
 :: Use /std:c++20 if compiling in C++ mode
-cl /nologo %options% %include_paths% /DGLFW_INCLUDE_VULKAN main.c %libs% /link %library_paths% vulkan-1.lib User32.lib Gdi32.lib Shell32.lib
+cl /nologo %options% %include_paths% %defines% main.c %libs% /link %library_paths% vulkan-1.lib User32.lib Gdi32.lib Shell32.lib
 
 if not exist bin\shaders md bin\shaders
 

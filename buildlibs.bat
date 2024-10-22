@@ -64,7 +64,7 @@ if exist %vma_src%\ (
     pushd .
     cd %vma_src%
     echo Compiling VulkanMemoryAllocator into %vma_dst%
-    cl /c /nologo %options% /Tp vk_mem_alloc.h /I%vulkan_sdk%\Include
+    cl /c /nologo %options% /DVMA_IMPLEMENTATION /Tp vk_mem_alloc.h /I%vulkan_sdk%\Include
     popd
     lib /nologo %vma_src%\*.obj /out:%vma_dst%
     del %vma_src%\*.obj

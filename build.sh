@@ -52,7 +52,8 @@ if [ "$is_macos" = true ]; then
     defines="$defines -DVULKAN_DRIVER_FILES=\"$moltenvk_driver\""
     clang -g -O0 -Wall $include_paths $library_paths $defines main.c $shared_a $libraries -Wl,-rpath,$vulkan_sdk_platform/lib
 else
-    gcc -g -O0 -Wall $include_paths $library_paths $defines main.c $shared_a -lm $libraries -Wl,--disable-new-dtags,-rpath=$vulkan_sdk_platform/lib
+    # -Wno-missing-braces is to avoid console spamming (for a compiler bug?)
+    gcc -g -O0 -Wall -Wno-missing-braces $include_paths $library_paths $defines main.c $shared_a -lm $libraries -Wl,--disable-new-dtags,-rpath=$vulkan_sdk_platform/lib
 fi
 
 # Compile all shaders
