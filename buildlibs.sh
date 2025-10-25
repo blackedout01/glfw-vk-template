@@ -21,11 +21,24 @@
 #
 # For more information, please refer to https://unlicense.org
 
-vulkan_sdk="/Applications/VulkanSDK"
+# NOTE(blackedout): Path to the root directory of the Vulkan SDK.
+# For example if located at /Applications/VulkanSDK, let vulkan_sdk="/Applications/VulkanSDK"
+# To download and use a local Vulkan SDK without installing, let vulkan_sdk=
+vulkan_sdk=
 
-mkdir -p bin
+script_dir=$(dirname $0)
 
-# Argument for sed: set Vulkan SDK path in build.sh (double quotes allow for variables while single quotes don't, the escaping is done for sh)
+# NOTE(blackedout): Download, unzip and extract the latest Vulkan SDK if $vulkan_sdk is empty
+if [ -z "${vulkan_sdk}" ]; then
+    echo "Variable 'vulkan_sdk' is empty, using using local Vulkan SDK."
+    . "fetch_vulkan_sdk.sh"
+    vulkan_sdk_version=`cat vulkan/latest_sdk_version.txt`
+
+    vulkan_sdk="$PWD/$script_dir/vulkan/vulkansdk-macos-$latest_sdk_version"
+fi
+
+# NOTE(blackedout): Argument for sed: set Vulkan SDK path in build.sh and macos_make_bundle.sh
+# (double quotes allow for variables while single quotes don't, the escaping is done for sh)
 sed_arg="s@vulkan_sdk=\"[^\"]*\"@vulkan_sdk=\"$vulkan_sdk\"@g"
 
 if [ "$(uname)" = "Darwin" ]; then
@@ -46,7 +59,10 @@ if [ ! -d "$vulkan_sdk_platform" ]; then
     exit 1
 fi
 
-# GLFW
+# NOTE(blackedout): Create bin folder where the compiled library files will be stored
+mkdir -p bin
+
+# NOTE(blackedout): Compile GLFW into $glfw_dst
 glfw_src="glfw/src"
 glfw_dst="bin/glfw.a"
 
@@ -77,7 +93,7 @@ cd "$OLDPWD"
 ar rc $glfw_dst $glfw_src/*.o
 rm $glfw_src/*.o
 
-# Vulkan Memory Allocator
+# NOTE(blackedout): Compile Vulkan Memory Allocator into $vma_dst
 vma_src="VulkanMemoryAllocator/include"
 vma_dst="bin/vma.a"
 
